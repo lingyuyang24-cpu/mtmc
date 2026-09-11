@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>MTMC · 多摄像头追踪工作台</title>
+  <meta name="description" content="实时多路视频流追踪与离线视频跨摄像头身份关联。">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230d1829'/%3E%3Cpath d='M6 13V6h7M19 6h7v7M26 19v7h-7M13 26H6v-7' fill='none' stroke='%2361dacb' stroke-width='3'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/static/style.css"><script src="/static/media.js" defer></script><script src="/static/app.js" defer></script>
+</head>
+<body>
+<header class="topbar"><a class="brand" href="/" aria-label="MTMC 首页"><span class="brand-icon">⌗</span><strong>MTMC</strong><span class="brand-sub">多摄像头追踪工作台</span></a><span id="health" class="connection">正在连接后端…</span></header>
+<main>
+  <div class="page-heading"><div><p class="eyebrow">TRACKING WORKSPACE</p><h1>让每个视角，关联同一个人。</h1></div><span class="model-tag">YOLO11 + Deep SORT + TransReID</span></div>
+  <div class="workspace">
+    <aside class="configuration">
+      <div class="tabs" role="tablist" aria-label="追踪模式"><button id="online-tab" role="tab" aria-selected="true" aria-controls="online-panel">实时在线</button><button id="offline-tab" role="tab" aria-selected="false" aria-controls="offline-panel">离线视频</button></div>
+      <form id="job-form">
+        <div class="form-heading"><h2 id="source-title">接入视频流</h2><span class="step">01 / 输入源</span></div>
+        <section id="online-panel" role="tabpanel" aria-labelledby="online-tab"><p class="muted">支持 RTSP、HTTP 和 HTTPS。每个地址对应一个摄像头。</p><div id="streams"></div><button id="add-stream" class="secondary full" type="button">＋ 添加视频流</button></section>
+        <section id="offline-panel" role="tabpanel" aria-labelledby="offline-tab" hidden><p class="muted">一次选择多个视频，也可继续添加。每个文件视为一个摄像头。</p><label class="upload-zone" id="dropzone"><span class="upload-symbol">↥</span><strong>选择或拖入视频文件</strong><span>MP4 · AVI · MOV · MKV · WEBM · M4V</span><input id="files" type="file" accept=".mp4,.avi,.mov,.mkv,.webm,.m4v" multiple></label><div id="file-list"></div></section>
+        <details class="parameters"><summary>追踪参数 <span>02 / 模型</span></summary><div class="field"><label for="confidence">检测置信度</label><input id="confidence" type="number" min="0.05" max="1" step="0.05" value="0.35"></div><div class="field"><label for="threshold">跨镜匹配阈值</label><input id="threshold" type="number" min="0.01" max="1" step="0.01" value="0.3"></div><p class="muted">余弦距离阈值越小，身份合并越保守。</p><div class="field"><label for="batch-size">特征提取批大小</label><select id="batch-size"><option>1</option><option>2</option><option selected>4</option><option>8</option><option>16</option></select></div><div class="field"><label for="min-frames">离线身份融合最少特征帧</label><input id="min-frames" type="number" min="1" max="64" value="10"></div></details>
+        <div id="form-error" class="error" role="alert" hidden></div><button class="primary full" id="start" type="submit">开始在线追踪 <span>→</span></button><p class="local-note">本地推理 · 视频与模型数据保留在本机</p>
+      </form>
+    </aside>
+    <section class="results" aria-label="追踪结果">
+      <div class="result-toolbar"><div><h2>追踪视图</h2><span class="muted" id="task-label">尚未启动任务</span></div><div class="toolbar-actions"><span id="task-status" class="badge">待接入</span><button id="stop" class="danger" hidden>停止任务</button></div></div>
+      <div class="metrics"><div><span>输入摄像头</span><strong id="metric-cameras">—</strong></div><div><span>已处理帧</span><strong id="metric-frames">—</strong></div><div><span>全局身份</span><strong id="metric-identities">—</strong></div><div><span>处理速度</span><strong id="metric-fps">—</strong></div></div>
+      <div id="progress-area" hidden><div class="progress-copy"><span id="progress-message">准备中</span><span id="progress-percent"></span></div><progress id="progress" max="100" value="0"></progress></div>
+      <div id="task-error" class="error" role="alert" hidden></div>
+      <div id="empty-view" class="empty-view"><div class="viewfinder"><span>＋</span></div><h3>等待接入画面</h3><p>添加流地址或上传视频，<br>在这里查看追踪框与跨摄像头全局 ID。</p><span class="empty-foot">画面将在模型加载并收到第一帧后显示</span></div>
+      <div id="camera-grid" class="camera-grid"></div>
+      <section id="downloads" hidden><div class="section-heading"><h3>结果文件</h3><span class="muted">标注视频与身份映射</span></div><div id="artifact-list"></div></section>
+      <section class="history"><div class="section-heading"><h3>最近任务</h3><button id="refresh" class="text-button">刷新</button></div><div id="job-list"><p class="muted">还没有追踪任务。</p></div></section>
+    </section>
+  </div>
+  <footer><span>MTMC / 多目标 · 多摄像头</span><span>全局 ID 为模型推断结果，需结合现场视频验证。</span></footer>
+</main>
+</body></html>

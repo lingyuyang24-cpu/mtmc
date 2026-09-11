@@ -1,0 +1,22 @@
+numpy
+Cython
+h5py==2.10
+Pillow
+six
+scipy
+opencv-python
+matplotlib
+tb-nightly
+future
+yacs
+gdown
+flake8
+yapf
+isort
+imageio
+scikit-learn==0.22.2
+torch
+torchvision
+ultralytics
+# Legacy TensorFlow/Keras YOLO scripts are kept in the repo, but demo.py now
+# uses the PyTorch/torchvision path and does not require tensorflow or keras.

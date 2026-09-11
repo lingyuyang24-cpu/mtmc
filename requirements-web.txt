@@ -1,0 +1,7 @@
+-r requirements-runtime.txt
+fastapi>=0.115,<1
+uvicorn>=0.30,<1
+av>=14,<19
+websockets>=14,<17
+# 测试 API 时使用；不依赖浏览器前端构建工具。
+httpx>=0.27,<1

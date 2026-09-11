@@ -1,0 +1,11 @@
+# Current PyTorch inference path (demo.py / demo_stream.py), Python 3.10+.
+# The legacy requirements.txt also contains old training / TensorFlow-era pins.
+numpy>=1.24
+scipy>=1.10
+opencv-python>=4.8
+Pillow>=9
+torch>=2.1
+torchvision>=0.16
+ultralytics>=8.3
+yacs>=0.1.8
+gdown>=5

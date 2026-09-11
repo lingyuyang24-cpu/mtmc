@@ -1,0 +1,8 @@
+{
+  "model_name": "my_reid_model",
+  "weights_path": "weights.pth",
+  "feature_dim": 512,
+  "use_camera_id": false,
+  "use_view_id": false,
+  "normalize": true
+}

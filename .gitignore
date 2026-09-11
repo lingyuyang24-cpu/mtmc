@@ -1,0 +1,44 @@
+# 本机环境、缓存与编辑器配置
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+*.so
+*.pyd
+*.obj
+*.lib
+*.exp
+.DS_Store
+.idea/
+.vscode/
+
+# 本机配置与凭据（示例配置允许提交）
+.env
+.env.*
+!.env.example
+!.env.sample
+*.pem
+*.key
+
+# 模型权重由使用者按 README 准备，不提交到 Git
+*.pt
+*.pth
+*.ckpt
+*.onnx
+*.weights
+*.h5
+*.pb
+*.safetensors
+model_data/models/
+external/transreid/weights/
+
+# 视频、上传内容、追踪结果及日志保留在本机
+videos/
+web_data/
+runs/
+outputs/
+*.log
