@@ -2,7 +2,7 @@
 const $ = id => document.getElementById(id);
 const terminal = new Set(['completed', 'failed', 'cancelled']);
 const statusText = {starting:'加载模型', running:'追踪中', stopping:'停止中', completed:'已完成', failed:'失败', cancelled:'已停止'};
-const cameraText = {waiting:'等待画面', running:'追踪中', reconnecting:'无新帧 · 重连中', fusing:'等待融合', rendering:'输出全局 ID', completed:'已完成'};
+const cameraText = {waiting:'等待处理', loading:'加载独立模型', running:'追踪中', reconnecting:'无新帧 · 重连中', fusing:'等待融合', rendering:'输出全局 ID', completed:'已完成'};
 const state = {mode:'online', streams:[''], files:[], selected:null, jobs:[], busy:false, online:false, refreshing:false, uploads:new Map(), cards:new Map(), limit:0};
 function node(tag, className, text) {const n=document.createElement(tag); if(className)n.className=className; if(text!==undefined)n.textContent=text; return n;}
 function errorText(data) {return Array.isArray(data.detail) ? data.detail.map(e=>`${e.loc?.slice(1).join('.')}：${e.msg}`).join('；') : data.detail || '请求失败，请稍后重试。';}
@@ -20,6 +20,8 @@ function updateControls() {
   document.querySelectorAll('#job-form button, #job-form input, #job-form select, [role=tab]').forEach(el=>el.disabled=state.busy);
   $('start').disabled=state.busy || !state.online || !!activeJob();
   $('min-frames').disabled=state.busy || state.mode==='online';
+  $('offline-workers').disabled=state.busy || state.mode==='online';
+  $('offline-concurrency').hidden=state.mode==='online';
   $('start').textContent=state.busy ? '正在提交…' : activeJob() ? '请等待或停止当前任务' : state.mode==='online' ? '开始在线追踪 →' : '开始离线追踪 →';
   $('stop').disabled=state.busy || state.selected?.status==='stopping';
 }
@@ -72,7 +74,7 @@ function upload(file, index, total) {
     xhr.send(file);
   });
 }
-function selectedOptions() {return {confidence:Number($('confidence').value),reid_threshold:Number($('threshold').value),batch_size:Number($('batch-size').value),min_reid_frames:Number($('min-frames').value)};}
+function selectedOptions() {return {confidence:Number($('confidence').value),reid_threshold:Number($('threshold').value),batch_size:Number($('batch-size').value),min_reid_frames:Number($('min-frames').value),offline_workers:Number($('offline-workers').value)};}
 function validateStreams(values) {
   if(!values.length)throw new Error('请至少添加一路流地址。');
   return values.map((raw,i)=>{

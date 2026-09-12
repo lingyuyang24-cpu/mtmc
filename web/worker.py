@@ -68,6 +68,27 @@ class Reporter:
                 if p.is_file() and p.suffix in ('.avi', '.mp4', '.json', '.jsonl')]
 
 
+def load_models(spec, check):
+    """为一个工作线程创建独立模型，不与其他视频推理线程共享可变状态。"""
+    from web.jobs import ROOT
+    from torch_detector import build_person_detector
+    from reid_backends import create_reid_encoder
+    detector_path = Path(os.environ.get('MTMC_DETECTOR', str(ROOT / 'yolo11l.pt')))
+    if not detector_path.is_file():
+        raise ValueError('本地 YOLO 权重不存在，请配置 MTMC_DETECTOR。')
+    check()
+    detector = build_person_detector(str(detector_path), backend='ultralytics',
+                                     score_threshold=spec['options']['confidence'])
+    check()
+    encoder = create_reid_encoder(
+        backend='transreid', batch_size=spec['options']['batch_size'],
+        transreid_variant='msmt17', transreid_download=False,
+        transreid_repo=os.environ.get('MTMC_TRANSREID_REPO', str(ROOT / 'external/transreid/repo')),
+        transreid_weights=os.environ.get('MTMC_TRANSREID_WEIGHTS', str(ROOT / 'external/transreid/weights/vit_transreid_msmt.pth')))
+    check()
+    return detector, encoder
+
+
 def run_worker(spec, events, cancel):
     from web.jobs import ROOT
     os.chdir(ROOT)
@@ -85,25 +106,14 @@ def run_worker(spec, events, cancel):
     try:
         import torch
         torch.set_num_threads(max(1, int(os.environ.get('MTMC_CPU_THREADS', '2'))))
-        from torch_detector import build_person_detector
-        from reid_backends import create_reid_encoder
-        detector_path = Path(os.environ.get('MTMC_DETECTOR', str(ROOT / 'yolo11l.pt')))
-        if not detector_path.is_file():
-            raise ValueError('本地 YOLO 权重不存在，请配置 MTMC_DETECTOR。')
-        reporter.check()
-        detector = build_person_detector(str(detector_path), backend='ultralytics',
-                                         score_threshold=spec['options']['confidence'])
-        reporter.check()
-        encoder = create_reid_encoder(
-            backend='transreid', batch_size=spec['options']['batch_size'],
-            transreid_variant='msmt17', transreid_download=False,
-            transreid_repo=os.environ.get('MTMC_TRANSREID_REPO', str(ROOT / 'external/transreid/repo')),
-            transreid_weights=os.environ.get('MTMC_TRANSREID_WEIGHTS', str(ROOT / 'external/transreid/weights/vit_transreid_msmt.pth')))
-        reporter.check()
-        reporter.started = time.monotonic()
-        reporter.emit(force=True)
         from web.pipeline import run_offline, run_online
-        (run_offline if spec['mode'] == 'offline' else run_online)(spec, detector, encoder, reporter)
+        if spec['mode'] == 'offline':
+            run_offline(spec, None, None, reporter, model_factory=lambda: load_models(spec, reporter.check))
+        else:
+            detector, encoder = load_models(spec, reporter.check)
+            reporter.started = time.monotonic()
+            reporter.emit(force=True)
+            run_online(spec, detector, encoder, reporter)
         reporter.emit(force=True, status='completed', message='追踪完成，结果可下载。',
                       progress=100 if spec['mode'] == 'offline' else None,
                       artifacts=reporter.artifacts())
@@ -111,6 +121,8 @@ def run_worker(spec, events, cancel):
         events.put({'status': 'cancelled', 'message': '任务已停止。', 'artifacts': reporter.artifacts()})
     except Exception as exc:
         message = str(exc)
+        if spec['mode'] == 'offline' and (isinstance(exc, MemoryError) or 'out of memory' in message.lower()):
+            message += '；请降低离线并行路数或特征提取批大小后重试。'
         for source in spec['sources']:
             message = message.replace(source, '[输入源]')
         message = re.sub(r'(?i)(?:rtsp|https?)://\S+', '[流地址已隐藏]', message)

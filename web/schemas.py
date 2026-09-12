@@ -9,6 +9,7 @@ class TrackingOptions(BaseModel):
     reid_threshold: float = Field(default=0.3, gt=0, le=1)
     batch_size: int = Field(default=4, ge=1, le=32)
     min_reid_frames: int = Field(default=10, ge=1, le=64)
+    offline_workers: int = Field(default=2, ge=1, le=4, strict=True)
 
 
 class StreamInput(BaseModel):

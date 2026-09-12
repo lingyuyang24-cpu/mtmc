@@ -33,7 +33,7 @@ class Encoder:
 def pipeline_worker(spec, events, cancel):
     reporter = Reporter(spec, events, cancel)
     try:
-        run_offline(spec, Detector(), Encoder(), reporter)
+        run_offline(spec, None, None, reporter, model_factory=lambda: (Detector(), Encoder()))
         reporter.emit(force=True, status='completed', artifacts=reporter.artifacts())
     except Exception as exc:
         events.put({'status': 'failed', 'error': str(exc)})
@@ -124,6 +124,13 @@ class WebTests(unittest.TestCase):
         self.assertEqual(self.client.get('/api/jobs/no-such-job').status_code, 404)
         self.assertEqual(self.client.post('/api/jobs/no-such-job/stop', headers=self.headers).status_code, 404)
 
+    def test_offline_worker_count_is_validated_before_job_creation(self):
+        for workers in (0, 5, True, 1.5, '2'):
+            response=self.client.post('/api/jobs/offline',json={
+                'upload_ids':['a'*32], 'options':{'offline_workers':workers}},headers=self.headers)
+            self.assertEqual(response.status_code,422,response.text)
+        self.assertEqual(self.client.get('/api/health').json()['active_job_id'],None)
+
     def test_three_videos_infer_fuse_preview_download_and_replay(self):
         ids=[]
         for i in range(3):
@@ -136,6 +143,7 @@ class WebTests(unittest.TestCase):
         job=await_terminal(self.client,job_id)
         self.assertEqual(job['status'],'completed',job)
         self.assertEqual(job['processed_frames'],27)
+        self.assertEqual(job['offline_workers'],2)
         self.assertEqual(job['identity_count'],1)
         self.assertEqual(len(job['artifacts']),8)
         mapping=self.client.get(f'/api/jobs/{job_id}/artifacts/id_mapping.json').json()
