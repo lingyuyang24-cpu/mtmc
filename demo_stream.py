@@ -91,13 +91,11 @@ def reid_feature_quality(frame, bbox, confidence, args, track_hits, other_boxes=
     if area_ratio < args.global_feature_min_area_ratio:
         return 0.0
 
-    # Keep tracking occluded people, but do not use mixed-person crops for ReID.
-    max_occlusion = args.global_feature_max_occlusion
     for other in other_boxes:
         ox1, oy1, ox2, oy2 = other
         intersection = max(0, min(x2, ox2) - max(x1, ox1)) * max(
             0, min(y2, oy2) - max(y1, oy1))
-        if intersection / float(width * height) > max_occlusion:
+        if intersection / float(width * height) > args.global_feature_max_occlusion:
             return 0.0
 
     margin = args.global_feature_border_margin
@@ -112,11 +110,50 @@ def reid_feature_quality(frame, bbox, confidence, args, track_hits, other_boxes=
         if crop.size == 0:
             return 0.0
         gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-        blur_score = float(cv2.Laplacian(gray, cv2.CV_64F).var())
-        if blur_score < args.global_feature_min_blur:
+        if float(cv2.Laplacian(gray, cv2.CV_64F).var()) < args.global_feature_min_blur:
             return 0.0
-
     return float(confidence)
+
+
+def suppress_duplicate_tracks(tracks, containment_threshold=.85,
+                              max_cosine_distance=.15):
+    """Remove nested local boxes that describe the same visible person."""
+    if containment_threshold <= 0 or len(tracks) < 2:
+        return tracks
+
+    def area(track):
+        x1, y1, x2, y2 = track['bbox']
+        return max(0, x2 - x1) * max(0, y2 - y1)
+
+    def duplicate(a, b):
+        ax1, ay1, ax2, ay2 = a['bbox']
+        bx1, by1, bx2, by2 = b['bbox']
+        intersection = max(0, min(ax2, bx2) - max(ax1, bx1)) * max(
+            0, min(ay2, by2) - max(ay1, by1))
+        containment = intersection / max(1.0, min(area(a), area(b)))
+        if containment < containment_threshold:
+            return False
+        af = np.asarray(a.get('feature'), dtype=np.float32).reshape(-1)
+        bf = np.asarray(b.get('feature'), dtype=np.float32).reshape(-1)
+        if not af.size or af.shape != bf.shape or not np.all(np.isfinite(af)) \
+                or not np.all(np.isfinite(bf)):
+            return False
+        denom = float(np.linalg.norm(af) * np.linalg.norm(bf))
+        if denom <= 1e-12:
+            return False
+        distance = float(np.clip(1.0 - np.dot(af, bf) / denom, 0.0, 2.0))
+        return distance <= max_cosine_distance
+
+    ranked = sorted(range(len(tracks)),
+                    key=lambda index: (area(tracks[index]),
+                                       tracks[index]['feature_quality']),
+                    reverse=True)
+    kept = []
+    for index in ranked:
+        if any(duplicate(tracks[index], tracks[other]) for other in kept):
+            continue
+        kept.append(index)
+    return [tracks[index] for index in sorted(kept)]
 
 
 class LatestFrameReader(object):
@@ -310,7 +347,8 @@ class CameraTracker(object):
         self.tracker = Tracker(
             metric,
             max_age=args.tracker_max_age,
-            n_init=args.tracker_n_init
+            n_init=args.tracker_n_init,
+            new_track_min_confidence=args.tracker_new_track_min_confidence
         )
 
     def process(self, frame):
@@ -337,18 +375,17 @@ class CameraTracker(object):
         tracks = []
         frame_h, frame_w = frame.shape[:2]
         for track in self.tracker.tracks:
-            if not track.is_confirmed() or track.time_since_update > 1:
+            if not track.is_confirmed() or track.time_since_update > 0:
                 continue
-            bbox = track.to_tlbr()
+            bbox = track.last_detection_bbox
             x1 = max(0, int(bbox[0]))
             y1 = max(0, int(bbox[1]))
             x2 = min(frame_w - 1, int(bbox[2]))
             y2 = min(frame_h - 1, int(bbox[3]))
             if x2 <= x1 or y2 <= y1:
                 continue
-            updated_this_frame = track.time_since_update == 0
-            feature = getattr(track, 'last_feature', None) if updated_this_frame else None
-            confidence = getattr(track, 'last_confidence', None) if updated_this_frame else None
+            feature = getattr(track, 'last_feature', None)
+            confidence = getattr(track, 'last_confidence', None)
             feature_bbox = track.last_detection_bbox
             # Judge the detection crop that produced the feature, not the display box.
             other_boxes = [other.last_detection_bbox for other in self.tracker.tracks
@@ -367,7 +404,10 @@ class CameraTracker(object):
                 'feature': feature,
                 'feature_quality': quality,
             })
-        return tracks
+        return suppress_duplicate_tracks(
+            tracks,
+            self.args.track_duplicate_containment,
+            self.args.track_duplicate_max_cosine_distance)
 
 
 def build_reid(args):
@@ -394,7 +434,8 @@ def get_color(idx):
     return ((37 * idx) % 255, (17 * idx) % 255, (29 * idx) % 255)
 
 
-def draw_global_track(frame, bbox, global_id, show_pending=False, text_scale_factor=1.4):
+def draw_global_track(frame, bbox, global_id, local_id=None, show_local_id=False,
+                      show_pending=False, text_scale_factor=1.4):
     x1, y1, x2, y2 = bbox
     color = (120, 120, 120) if global_id is None else get_color(global_id)
     line_thickness = max(2, int(frame.shape[1] / 400.0))
@@ -404,6 +445,8 @@ def draw_global_track(frame, bbox, global_id, show_pending=False, text_scale_fac
         return
 
     label = 'GID:{}'.format(global_id if global_id is not None else '?')
+    if show_local_id and local_id is not None:
+        label += ' LID:{}'.format(local_id)
     font = cv2.FONT_HERSHEY_PLAIN
     text_scale = float(text_scale_factor) * max(1.0, frame.shape[1] / 1600.0)
     text_thickness = max(2, int(round(text_scale)))
@@ -512,7 +555,14 @@ def parse_args(argv=None):
     parser.add_argument('--detector', default='yolo11l.pt')
     parser.add_argument('--detector-backend', choices=('auto', 'ultralytics', 'torchvision'), default='auto')
     parser.add_argument('--detector-weights', default='default')
-    parser.add_argument('--detector-score', type=float, default=0.3)
+    parser.add_argument('--detector-score', type=float, default=0.20)
+    parser.add_argument('--detector-imgsz', type=int, default=1280)
+    parser.add_argument('--tracker-new-track-min-confidence', type=float, default=.25)
+    parser.add_argument('--global-gallery-match',
+                        choices=('topk', 'centroid', 'hybrid', 'adaptive', 'bidirectional'),
+                        default='adaptive')
+    parser.add_argument('--global-candidate-threshold', type=float, default=.45,
+                        help='Wider retrieval ceiling; final confirmation remains independently strict.')
 
     parser.add_argument('--reid-backend', choices=('torchreid', 'transreid', 'custom'), default='transreid')
     parser.add_argument('--reid-model', default='resnet50')
@@ -536,18 +586,26 @@ def parse_args(argv=None):
         default=100,
         help='Maximum ReID samples retained per active local track. <= 0 means unlimited.'
     )
-    parser.add_argument('--post-nms', choices=('detector', 'nms'), default='detector',
+    parser.add_argument('--post-nms', choices=('detector', 'nms'), default='nms',
                         help='Use detector suppression only, or add score-ordered IoU NMS.')
-    parser.add_argument('--nms-max-overlap', type=float, default=0.4)
-    parser.add_argument('--tracker-max-age', type=int, default=300)
+    parser.add_argument('--nms-max-overlap', type=float, default=0.35)
+    parser.add_argument('--tracker-max-age', type=int, default=30)
     parser.add_argument('--tracker-n-init', type=int, default=3)
+    parser.add_argument('--track-duplicate-containment', type=float, default=.85)
+    parser.add_argument('--track-duplicate-max-cosine-distance', type=float, default=.15)
 
-    parser.add_argument('--global-reid-threshold', type=float, default=0.3)
+    parser.add_argument('--global-reid-threshold', type=float, default=0.35)
+    parser.add_argument('--global-reid-strong-threshold', type=float, default=0.25)
     parser.add_argument('--global-reid-margin', type=float, default=0.02)
     parser.add_argument('--global-delay', type=float, default=1.0)
     parser.add_argument('--global-min-features', type=int, default=5)
     parser.add_argument('--global-confirm-windows', type=int, default=3,
                         help='Consecutive non-overlapping feature windows required to reuse a GID.')
+    parser.add_argument('--global-borderline-confirm-frames', type=int, default=15)
+    parser.add_argument('--global-borderline-confirm-ratio', type=float, default=.8)
+    parser.add_argument('--global-borderline-confirm-threshold', type=float, default=.35)
+    parser.add_argument('--global-prototype-count', type=int, default=6)
+    parser.add_argument('--global-prototype-merge-threshold', type=float, default=.15)
     parser.add_argument('--global-revalidate-threshold', type=float, default=0.4)
     parser.add_argument('--global-revalidate-windows', type=int, default=3)
     parser.add_argument('--global-pending-timeout', type=float, default=10.0)
@@ -558,13 +616,13 @@ def parse_args(argv=None):
     parser.add_argument('--global-feature-aggregate-frames', type=int, default=5)
     parser.add_argument('--global-feature-min-novelty', type=float, default=0.03)
     parser.add_argument('--global-feature-update-max-distance', type=float, default=0.35)
-    parser.add_argument('--global-feature-min-confidence', type=float, default=0.4)
+    parser.add_argument('--global-feature-min-confidence', type=float, default=0.60)
     parser.add_argument('--global-feature-min-track-hits', type=int, default=5)
-    parser.add_argument('--global-feature-min-box-height', type=int, default=48)
+    parser.add_argument('--global-feature-min-box-height', type=int, default=96)
     parser.add_argument('--global-feature-min-area-ratio', type=float, default=0.0005)
     parser.add_argument('--global-feature-border-margin', type=int, default=2)
     parser.add_argument('--global-feature-min-blur', type=float, default=15.0)
-    parser.add_argument('--global-feature-max-occlusion', type=float, default=0.6,
+    parser.add_argument('--global-feature-max-occlusion', type=float, default=0.2,
                         help='Reject ReID crops covered beyond this fraction by another person.')
     parser.add_argument('--global-distance', choices=('cosine', 'euclidean'), default='cosine')
     parser.add_argument('--global-topk', type=int, default=3)
@@ -572,9 +630,12 @@ def parse_args(argv=None):
     parser.add_argument('--global-active-timeout', type=float, default=0.3)
     parser.add_argument('--global-stale-timeout', type=float, default=1800)
     parser.add_argument('--same-camera-reconnect', nargs='?', const=True, type=str2bool, default=True)
-    parser.add_argument('--same-camera-reconnect-timeout', type=float, default=5.0)
+    parser.add_argument('--same-camera-reconnect-timeout', type=float, default=1800.0)
     parser.add_argument('--same-camera-reconnect-distance', type=float, default=0.4)
     parser.add_argument('--same-camera-reconnect-min-iou', type=float, default=0.02)
+    parser.add_argument('--same-camera-reconnect-reid-threshold', type=float, default=.5)
+    parser.add_argument('--same-camera-reconnect-reid-margin', type=float, default=.05)
+    parser.add_argument('--same-camera-conflict-continuity', type=float, default=5.0)
     parser.add_argument('--same-camera-reconnect-confirm-frames', type=int, default=10)
     parser.add_argument('--same-camera-reconnect-confirm-ratio', type=float, default=0.6)
     parser.add_argument('--same-camera-reconnect-confirm-threshold', type=float, default=0.35)
@@ -582,6 +643,7 @@ def parse_args(argv=None):
     parser.add_argument('--display', nargs='?', const=True, type=str2bool, default=True)
     parser.add_argument('--window-name', default='MTMC Stream')
     parser.add_argument('--show-pending', nargs='?', const=True, type=str2bool, default=False)
+    parser.add_argument('--show-local-id', nargs='?', const=True, type=str2bool, default=False)
     parser.add_argument('--display-wait-ms', type=int, default=1)
     parser.add_argument(
         '--gid-text-scale',
@@ -595,6 +657,8 @@ def parse_args(argv=None):
     parser.add_argument('--output', default=None, help='Optional path to save the realtime output video.')
     parser.add_argument('--track-log', default=None,
                         help='Optional JSONL log of camera, local/global IDs, timestamps and boxes.')
+    parser.add_argument('--debug-global-log', default=None,
+                        help='Optional JSONL log of global identity decisions.')
     parser.add_argument('--loop-videos', nargs='?', const=True, type=str2bool, default=False)
     parser.add_argument('--max-frames', type=int, default=0)
     return parser.parse_args(argv)
@@ -650,12 +714,44 @@ def main(argv=None, detector=None, encoder=None):
         raise ValueError('--global-feature-max-occlusion must be between 0 and 1.')
     if not 0 <= args.nms_max_overlap <= 1:
         raise ValueError('--nms-max-overlap must be between 0 and 1.')
+    if not 0 <= args.track_duplicate_containment <= 1:
+        raise ValueError('--track-duplicate-containment must be between 0 and 1.')
+    if not 0 <= args.track_duplicate_max_cosine_distance <= 2:
+        raise ValueError('--track-duplicate-max-cosine-distance must be between 0 and 2.')
     if args.same_camera_reconnect_confirm_frames < 1:
         raise ValueError('--same-camera-reconnect-confirm-frames must be >= 1.')
     if not 0 <= args.same_camera_reconnect_confirm_ratio <= 1:
         raise ValueError('--same-camera-reconnect-confirm-ratio must be between 0 and 1.')
     if args.same_camera_reconnect_confirm_threshold <= 0:
         raise ValueError('--same-camera-reconnect-confirm-threshold must be > 0.')
+    if args.same_camera_reconnect_reid_threshold <= 0:
+        raise ValueError('--same-camera-reconnect-reid-threshold must be > 0.')
+    if args.same_camera_reconnect_reid_margin < 0:
+        raise ValueError('--same-camera-reconnect-reid-margin must be >= 0.')
+    if args.same_camera_conflict_continuity < 0:
+        raise ValueError('--same-camera-conflict-continuity must be >= 0.')
+    if not 0 < args.global_reid_strong_threshold <= args.global_reid_threshold:
+        raise ValueError('--global-reid-strong-threshold must be > 0 and <= --global-reid-threshold.')
+    if args.global_borderline_confirm_frames < 1:
+        raise ValueError('--global-borderline-confirm-frames must be >= 1.')
+    if not 0 < args.global_borderline_confirm_ratio <= 1:
+        raise ValueError('--global-borderline-confirm-ratio must be in (0, 1].')
+    if not 0 < args.global_borderline_confirm_threshold <= args.global_reid_threshold:
+        raise ValueError('--global-borderline-confirm-threshold must be > 0 and <= --global-reid-threshold.')
+    if args.global_prototype_count < 0:
+        raise ValueError('--global-prototype-count must be >= 0.')
+    if not 0 <= args.global_prototype_merge_threshold <= 2:
+        raise ValueError('--global-prototype-merge-threshold must be between 0 and 2.')
+
+    decision_log = None
+    if args.debug_global_log:
+        log_dir = os.path.dirname(args.debug_global_log)
+        if log_dir:
+            os.makedirs(log_dir, exist_ok=True)
+        open(args.debug_global_log, 'w', encoding='utf-8').close()
+        def decision_log(event):
+            with open(args.debug_global_log, 'a', encoding='utf-8') as handle:
+                handle.write(json.dumps(event, allow_nan=False) + '\n')
 
     global_ids = GlobalIDManager(
         threshold=args.global_reid_threshold,
@@ -684,7 +780,19 @@ def main(argv=None, detector=None, encoder=None):
         confirm_windows=args.global_confirm_windows,
         revalidate_threshold=args.global_revalidate_threshold,
         revalidate_windows=args.global_revalidate_windows,
-        pending_timeout=args.global_pending_timeout
+        pending_timeout=args.global_pending_timeout,
+        match_strategy=args.global_gallery_match,
+        candidate_threshold=args.global_candidate_threshold,
+        strong_threshold=args.global_reid_strong_threshold,
+        borderline_confirm_frames=args.global_borderline_confirm_frames,
+        borderline_confirm_ratio=args.global_borderline_confirm_ratio,
+        borderline_confirm_threshold=args.global_borderline_confirm_threshold,
+        prototype_count=args.global_prototype_count,
+        prototype_merge_threshold=args.global_prototype_merge_threshold,
+        same_camera_reconnect_reid_threshold=args.same_camera_reconnect_reid_threshold,
+        same_camera_reconnect_reid_margin=args.same_camera_reconnect_reid_margin,
+        same_camera_conflict_continuity=args.same_camera_conflict_continuity,
+        decision_log=decision_log
     )
 
     configure_ffmpeg_low_latency(args)
@@ -692,7 +800,7 @@ def main(argv=None, detector=None, encoder=None):
         from torch_detector import build_person_detector
         detector = build_person_detector(
             model_name=args.detector, backend=args.detector_backend,
-            weights=args.detector_weights, score_threshold=args.detector_score)
+            weights=args.detector_weights, score_threshold=args.detector_score, imgsz=args.detector_imgsz)
     if encoder is None:
         encoder = build_reid(args)
     print('Detector:', detector)
@@ -759,6 +867,8 @@ def main(argv=None, detector=None, encoder=None):
                         frame,
                         track['bbox'],
                         global_id,
+                        local_id=track['local_id'],
+                        show_local_id=args.show_local_id,
                         show_pending=args.show_pending,
                         text_scale_factor=args.gid_text_scale
                     )

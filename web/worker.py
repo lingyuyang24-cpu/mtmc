@@ -3,11 +3,38 @@ import os
 from pathlib import Path
 import queue
 import re
+import sys
 import time
+import traceback
 
 
 class Cancelled(Exception):
     pass
+
+
+def redact_error(message, sources):
+    for source in sources:
+        message = message.replace(source, '[输入源]')
+    return re.sub(r'(?i)(?:rtsp|https?)://\S+', '[流地址已隐藏]', message)
+
+
+def silence_worker_output():
+    """Silence native libraries AND Python prints in the dedicated child.
+
+    On Windows, dup2 alone leaves sys.stdout's _WindowsConsoleIO referring to
+    a handle that is no longer a console. A model's first print then raises
+    WinError 1. Use a normal file stream for Python, and keep it open until the
+    child exits, while redirecting fd 1/2 for native OpenCV/FFmpeg output too.
+    """
+    sink = open(os.devnull, 'w', encoding='utf-8')
+    try:
+        os.dup2(sink.fileno(), 1)
+        os.dup2(sink.fileno(), 2)
+    except Exception:
+        sink.close()
+        raise
+    sys.stdout = sink
+    sys.stderr = sink
 
 
 class Reporter:
@@ -78,11 +105,9 @@ def run_worker(spec, events, cancel):
     os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = 'rtsp_transport;tcp'
     # OpenCV/FFmpeg 可能在原生 stderr 打印含密码的 URL；子进程禁用原始日志，
     # 仅通过下面经过脱敏的状态事件返回错误。
-    with open(os.devnull, 'w') as sink:
-        os.dup2(sink.fileno(), 1)
-        os.dup2(sink.fileno(), 2)
     reporter = Reporter(spec, events, cancel)
     try:
+        silence_worker_output()
         import torch
         torch.set_num_threads(max(1, int(os.environ.get('MTMC_CPU_THREADS', '2'))))
         from torch_detector import build_person_detector
@@ -92,7 +117,8 @@ def run_worker(spec, events, cancel):
             raise ValueError('本地 YOLO 权重不存在，请配置 MTMC_DETECTOR。')
         reporter.check()
         detector = build_person_detector(str(detector_path), backend='ultralytics',
-                                         score_threshold=spec['options']['confidence'])
+                                         score_threshold=spec['options']['confidence'],
+                                         imgsz=spec['options'].get('detector_imgsz', 640))
         reporter.check()
         encoder = create_reid_encoder(
             backend='transreid', batch_size=spec['options']['batch_size'],
@@ -110,10 +136,12 @@ def run_worker(spec, events, cancel):
     except Cancelled:
         events.put({'status': 'cancelled', 'message': '任务已停止。', 'artifacts': reporter.artifacts()})
     except Exception as exc:
-        message = str(exc)
-        for source in spec['sources']:
-            message = message.replace(source, '[输入源]')
-        message = re.sub(r'(?i)(?:rtsp|https?)://\S+', '[流地址已隐藏]', message)
+        message = redact_error(str(exc), spec['sources'])
+        try:
+            (reporter.directory / 'error.log').write_text(
+                redact_error(traceback.format_exc(), spec['sources']), encoding='utf-8')
+        except OSError:
+            pass  # Diagnostic failure must not hide the original worker failure.
         events.put({'status': 'failed', 'message': '追踪失败。',
                     'error': f'{type(exc).__name__}: {message[:500]}'})
     finally:

@@ -132,6 +132,9 @@ parser.add_argument('--reid-gallery-size', type=int, default=32,
                     help='Maximum representative features per fused identity.')
 parser.add_argument('--tracker-max-age', type=int, default=100)
 parser.add_argument('--tracker-n-init', type=int, default=3)
+parser.add_argument('--tracker-new-track-min-confidence', type=float, default=.25)
+parser.add_argument('--detector-imgsz', type=int, default=640)
+parser.add_argument('--reid-gallery-match', choices=('pairwise', 'bidirectional'), default='pairwise')
 parser.add_argument('--min-reid-frames', type=int, default=10)
 parser.add_argument(
     '--version',
@@ -295,7 +298,7 @@ def main(detector=None, args=None, encoder=None, out_dir='videos/output/'):
         from torch_detector import build_person_detector
         detector = build_person_detector(
             model_name=args.detector, backend=args.detector_backend,
-            weights=args.detector_weights, score_threshold=args.detector_score)
+            weights=args.detector_weights, score_threshold=args.detector_score, imgsz=args.detector_imgsz)
     print(f'Using {detector} model')
     # Definition of the parameters
     max_cosine_distance = args.deep_sort_max_cosine_distance
@@ -311,7 +314,8 @@ def main(detector=None, args=None, encoder=None, out_dir='videos/output/'):
     trackers = {
         camera_id: Tracker(
             nn_matching.NearestNeighborDistanceMetric('cosine', max_cosine_distance, nn_budget),
-            max_age=args.tracker_max_age, n_init=args.tracker_n_init)
+            max_age=args.tracker_max_age, n_init=args.tracker_n_init,
+            new_track_min_confidence=args.tracker_new_track_min_confidence)
         for camera_id in range(len(args.videos))
     }
 
@@ -462,7 +466,7 @@ def main(detector=None, args=None, encoder=None, out_dir='videos/output/'):
     global_ids, groups = fuse_tracklets(
         tracklets, threshold=args.reid_threshold, margin=args.reid_margin,
         min_frames=args.min_reid_frames, gallery_size=args.reid_gallery_size,
-        metric=args.reid_distance)
+        metric=args.reid_distance, match_strategy=args.reid_gallery_match)
     final_fuse_id = {gid: [member.key for member in group.members] for gid, group in groups.items()}
     mapping_path = os.path.join(out_dir, 'id_mapping.json')
     with open(mapping_path, 'w') as mapping_file:

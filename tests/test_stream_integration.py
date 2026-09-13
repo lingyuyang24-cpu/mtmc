@@ -48,7 +48,7 @@ class StreamIntegrationTests(unittest.TestCase):
                     '--global-delay', '0', '--global-min-features', '2',
                     '--global-feature-min-track-hits', '2', '--tracker-n-init', '2',
                     '--global-feature-aggregate-frames', '2', '--global-confirm-windows', '2',
-                    '--global-feature-min-blur', '0']
+                    '--global-feature-min-blur', '0', '--global-feature-min-box-height', '48']
             with contextlib.redirect_stdout(io.StringIO()):
                 main(argv, detector=FixedDetector(), encoder=FixedEncoder())
             rows = [json.loads(line) for line in log.read_text().splitlines()]

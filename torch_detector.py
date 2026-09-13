@@ -20,7 +20,8 @@ class UltralyticsYOLOPersonDetector(object):
         self,
         model_name='yolov8n.pt',
         score_threshold=0.6,
-        device=None
+        device=None,
+        imgsz=640
     ):
         try:
             from ultralytics import YOLO
@@ -31,6 +32,9 @@ class UltralyticsYOLOPersonDetector(object):
 
         self.model_name = model_name
         self.score_threshold = score_threshold
+        if not isinstance(imgsz, int) or imgsz < 32:
+            raise ValueError('Detector image size must be an integer >= 32.')
+        self.imgsz = imgsz
         self.device = device or ('cuda' if torch.cuda.is_available() else 'cpu')
         self.model = YOLO(model_name)
 
@@ -51,7 +55,8 @@ class UltralyticsYOLOPersonDetector(object):
             conf=self.score_threshold,
             classes=[self.COCO_PERSON_CLASS_ID],
             device=self.device,
-            verbose=False
+            verbose=False,
+            imgsz=self.imgsz
         )
 
         detections = []
@@ -238,7 +243,8 @@ def build_person_detector(
     backend='auto',
     weights='default',
     score_threshold=0.6,
-    device=None
+    device=None,
+    imgsz=640
 ):
     if backend not in ('auto', 'ultralytics', 'torchvision'):
         raise ValueError('Unknown detector backend: {}'.format(backend))
@@ -251,7 +257,8 @@ def build_person_detector(
         return UltralyticsYOLOPersonDetector(
             model_name=model_name,
             score_threshold=score_threshold,
-            device=device
+            device=device,
+            imgsz=imgsz
         )
 
     return TorchVisionPersonDetector(
