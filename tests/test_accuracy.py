@@ -13,7 +13,8 @@ import numpy as np
 from deep_sort.preprocessing import (
     delete_overlap_box, non_max_suppression, select_detection_indices)
 from global_identity import GlobalIDManager, mean_feature
-from demo_stream import CameraTracker, parse_args, reid_feature_quality
+from demo_stream import (CameraTracker, parse_args, reid_feature_quality,
+                         suppress_duplicate_tracks)
 
 
 A = np.array([1.0, 0.0], dtype=np.float32)
@@ -108,18 +109,30 @@ class GlobalIdentityTests(unittest.TestCase):
         confirmed = [gid for gid in result.values() if gid is not None]
         self.assertEqual(len(confirmed), len(set(confirmed)))
 
-    def test_revalidation_freezes_gallery_then_reassigns(self):
+    def test_continuous_owner_keeps_gid_when_stale_local_track_revives(self):
+        self.feed()
+        self.assertEqual(self.feed(local=2, start=1, count=4)[-1], 1)
+        result = self.manager.update_camera(0, [observation(1), observation(2)], 20)
+        self.assertEqual(result[2], 1)
+        self.assertNotEqual(result[1], 1)
+
+    def test_revalidation_freezes_gallery_but_retains_incumbent_without_alternative(self):
         self.feed()
         before = np.asarray(self.manager.global_tracks[1].features).copy()
         results = self.feed(feature=B, start=1, count=4)
-        self.assertIsNone(results[-1])
-        self.assertIsNone(self.manager.local_tracks[(0, 1)].global_id)
+        self.assertEqual(results, [1, 1, 1, 1])
+        self.assertEqual(self.manager.local_tracks[(0, 1)].global_id, 1)
         np.testing.assert_array_equal(before, self.manager.global_tracks[1].features)
-        self.assertEqual(self.feed(feature=B, start=2), [None, 2])
+
+    def test_revalidation_reassigns_only_to_clear_strong_alternative(self):
+        self.feed()
+        self.feed(camera=1, local=1, feature=B)
+        results = self.feed(feature=B, start=1, count=4)
+        self.assertEqual(results[-1], 2)
 
     def test_one_bad_window_can_recover(self):
         self.feed()
-        self.assertIsNone(self.feed(feature=B, start=1)[-1])
+        self.assertEqual(self.feed(feature=B, start=1)[-1], 1)
         self.assertEqual(self.feed(feature=A, start=2)[-1], 1)
 
     def test_position_reconnect_not_visible_before_confirmation(self):
@@ -138,9 +151,50 @@ class GlobalIdentityTests(unittest.TestCase):
         self.feed(manager=manager)
         results = self.feed(local=2, feature=B, start=1, count=6, manager=manager)
         self.assertNotIn(1, results)
-        self.assertIsNone(results[-1])
+        self.assertEqual(results[-1], 2)  # Reject the implausible position candidate immediately.
         self.assertEqual(self.feed(local=2, feature=B, start=2, manager=manager)[-1], 2)
         np.testing.assert_array_equal(manager.global_tracks[1].features, [A])
+
+    def test_same_camera_pose_change_reconnects_with_spatial_continuity(self):
+        manager = self.make_manager(
+            same_camera_reconnect=True,
+            same_camera_reconnect_timeout=1800,
+            same_camera_reconnect_distance=1.0,
+            same_camera_reconnect_reid_threshold=.5,
+            reconnect_confirm_threshold=.5,
+            reconnect_confirm_frames=4,
+            reconnect_confirm_ratio=.75)
+        self.feed(manager=manager)
+        changed = np.array([.54, math.sqrt(1 - .54 ** 2)], dtype=np.float32)
+        moved_box = (-40, 20, 0, 100)  # center movement is below one box diagonal
+        results = [manager.update_track(0, 2, changed, moved_box, .9, 10 + i * .1)
+                   for i in range(6)]
+        self.assertEqual(results[-1], 1)
+        self.assertEqual(len(manager.global_tracks), 1)
+
+    def test_same_camera_continuity_beats_slightly_closer_duplicate_gallery(self):
+        manager = self.make_manager(
+            threshold=.1,
+            candidate_threshold=.45,
+            same_camera_reconnect=True,
+            same_camera_reconnect_timeout=1800,
+            same_camera_reconnect_distance=1.0,
+            same_camera_reconnect_reid_threshold=.5,
+            same_camera_reconnect_reid_margin=.05,
+            reconnect_confirm_threshold=.5,
+            reconnect_confirm_frames=4,
+            reconnect_confirm_ratio=.75)
+        self.feed(manager=manager)  # GID 1 owns this position in camera 0.
+        query = np.array([.65, math.sqrt(1-.65**2)], dtype=np.float32)
+        # A different gallery is only .03 closer to the query, but has no
+        # same-camera positional history here.
+        angle = math.acos(.65) + math.acos(.68)
+        duplicate = np.array([math.cos(angle), math.sin(angle)], dtype=np.float32)
+        self.feed(camera=1, feature=duplicate, start=10, manager=manager)
+        self.assertEqual(len(manager.global_tracks), 2)
+        results = [manager.update_track(0, 2, query, BOX, .9, 20+i*.1)
+                   for i in range(6)]
+        self.assertEqual(results[-1], 1)
 
     def test_old_position_not_used_for_reconnect(self):
         manager = self.make_manager(same_camera_reconnect=True)
@@ -200,11 +254,11 @@ class GlobalIdentityTests(unittest.TestCase):
         np.testing.assert_array_equal(manager.global_tracks[2].features, [B])
 
     def test_rejected_position_can_confirm_an_existing_alternative(self):
-        manager = self.make_manager(same_camera_reconnect=True, reconnect_confirm_frames=4)
+        manager = self.make_manager(threshold=.1, same_camera_reconnect=True, reconnect_confirm_frames=4)
         self.feed(manager=manager)
         self.feed(camera=1, feature=B, start=0, manager=manager)
-        # First crop matches neither gallery; location suggests GID 1.
-        self.feed(local=2, feature=[-1, 0], start=1, manager=manager)
+        # Appearance is outside strict acceptance, but supports a GID 1 reconnect.
+        self.feed(local=2, feature=[.75, math.sqrt(1-.75**2)], start=1, manager=manager)
         self.feed(local=2, feature=B, start=1.2, count=4, manager=manager)
         self.assertIsNone(manager.local_tracks[(0, 2)].global_id)
         self.assertEqual(self.feed(local=2, feature=B, start=2, count=4, manager=manager)[-1], 2)
@@ -231,6 +285,8 @@ class CameraTrackerTests(unittest.TestCase):
         with patch.object(sys, 'argv', ['demo_stream.py', '--streams', 'placeholder']):
             self.args = parse_args()
         self.args.global_feature_min_blur = 0
+        self.args.global_feature_min_box_height = 48
+        self.args.global_feature_min_confidence = .4
         self.args.global_feature_min_track_hits = 2
         self.args.tracker_n_init = 2
         self.frame = np.zeros((160, 160, 3), dtype=np.uint8)
@@ -249,8 +305,7 @@ class CameraTrackerTests(unittest.TestCase):
         self.assertEqual(tracks[0]['feature_quality'], 0.9)
         detector.detect_image_with_scores = lambda image: ([], [])
         predicted = tracker.process(self.frame)
-        self.assertIsNone(predicted[0]['feature'])
-        self.assertEqual(predicted[0]['feature_quality'], 0)
+        self.assertEqual(predicted, [])
 
     def test_invalid_embeddings_use_motion_without_contaminating_appearance(self):
         detector = SimpleNamespace(detect_image_with_scores=lambda image: ([[20, 20, 40, 80]], [0.9]))
@@ -270,6 +325,22 @@ class CameraTrackerTests(unittest.TestCase):
                 self.assertEqual([t['local_id'] for t in tracks], [1])
                 self.assertGreater(tracks[0]['feature_quality'], 0)
                 self.assertTrue(np.all(np.isfinite(tracker.tracker.metric.samples[1])))
+
+    def test_nested_same_appearance_track_is_suppressed(self):
+        tracks = [
+            observation(1, bbox=(10, 10, 50, 100)),
+            observation(2, bbox=(20, 20, 45, 90)),
+        ]
+        kept = suppress_duplicate_tracks(tracks, .85, .15)
+        self.assertEqual([track['local_id'] for track in kept], [1])
+
+    def test_nested_different_people_are_not_suppressed(self):
+        tracks = [
+            observation(1, feature=A, bbox=(10, 10, 50, 100)),
+            observation(2, feature=B, bbox=(20, 20, 45, 90)),
+        ]
+        kept = suppress_duplicate_tracks(tracks, .85, .15)
+        self.assertEqual([track['local_id'] for track in kept], [1, 2])
 
 
 if __name__ == '__main__':

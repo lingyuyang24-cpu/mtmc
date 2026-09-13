@@ -37,7 +37,11 @@ class Tracker:
 
     """
 
-    def __init__(self, metric, max_iou_distance=0.7, max_age=30, n_init=3):
+    def __init__(self, metric, max_iou_distance=0.7, max_age=30, n_init=3,
+                 new_track_min_confidence=.25):
+        if not np.isfinite(new_track_min_confidence) or not 0 <= new_track_min_confidence <= 1:
+            raise ValueError('New-track confidence must be between 0 and 1.')
+        self.new_track_min_confidence = new_track_min_confidence
         self.metric = metric
         self.max_iou_distance = max_iou_distance
         self.max_age = max_age
@@ -75,7 +79,8 @@ class Tracker:
         for track_idx in unmatched_tracks:
             self.tracks[track_idx].mark_missed()
         for detection_idx in unmatched_detections:
-            self._initiate_track(detections[detection_idx])
+            if detections[detection_idx].confidence >= self.new_track_min_confidence:
+                self._initiate_track(detections[detection_idx])
         self.tracks = [t for t in self.tracks if not t.is_deleted()]
 
         # Update distance metric.
@@ -112,7 +117,7 @@ class Tracker:
         appearance_detections = [i for i, det in enumerate(detections)
                                  if det.feature is not None]
         motion_only_detections = [i for i, det in enumerate(detections)
-                                 if det.feature is None]
+                                  if det.feature is None]
         matches_a, unmatched_tracks_a, unmatched_detections = \
             linear_assignment.matching_cascade(
                 gated_metric, self.metric.matching_threshold, self.max_age,

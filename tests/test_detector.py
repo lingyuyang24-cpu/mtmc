@@ -19,9 +19,11 @@ class DetectorColorTests(unittest.TestCase):
         detector.model = SimpleNamespace(predict=predict)
         detector.device = 'cpu'
         detector.score_threshold = 0.3
+        detector.imgsz = 1280
         red = Image.new('RGB', (8, 8), (255, 0, 0))
         self.assertEqual(detector.detect_image_with_scores(red), ([], []))
         self.assertIsInstance(captured['source'], Image.Image)
+        self.assertEqual(captured['imgsz'], 1280)
         np.testing.assert_array_equal(np.asarray(captured['source']), np.asarray(red))
 
 

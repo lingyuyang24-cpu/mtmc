@@ -102,12 +102,19 @@ weights transfer to their nearest retained representative, including on merge.
         self.weights = np.bincount(assignments, weights=self.weights, minlength=len(selected))
         self.features = self.features[selected].copy()
 
-    def distance(self, other):
+    def distance(self, other, strategy='pairwise'):
         if self.metric != other.metric:
             raise ValueError('Cannot compare galleries with different metrics.')
+        if strategy not in ('pairwise', 'bidirectional'):
+            raise ValueError('Unknown gallery matching strategy: {}'.format(strategy))
         if not len(self.features) or not len(other.features):
             return float('inf')
         distances = feature_distance(self.features, other.features, self.metric)
+        if strategy == 'bidirectional':
+            # Every retained view needs support in the other tracklet. An
+            # isolated lucky sample pair cannot dominate both directions.
+            return float(.5 * (np.average(distances.min(axis=1), weights=self.weights)
+                               + np.average(distances.min(axis=0), weights=other.weights)))
         weights = np.outer(self.weights / self.weights.sum(), other.weights / other.weights.sum())
         return float(np.sum(distances * weights))
 
@@ -140,7 +147,7 @@ class FusionGroup:
 
 
 def fuse_tracklets(tracklets, threshold=0.2, margin=0.05, min_frames=10,
-                   gallery_size=32, metric='cosine'):
+                   gallery_size=32, metric='cosine', match_strategy='pairwise', decision_log=None):
     """Return tuple-key -> global ID and groups, retaining every input tracklet.
 
 Short/invalid tracklets keep their numeric output ID and cannot become merge
@@ -154,6 +161,8 @@ the stable numeric output IDs of group founders, so ties/order are reproducible.
         raise ValueError('Minimum frames and gallery size must be positive.')
     if metric not in ('cosine', 'euclidean'):
         raise ValueError('Unknown distance metric: {}'.format(metric))
+    if match_strategy not in ('pairwise', 'bidirectional'):
+        raise ValueError('Unknown gallery matching strategy: {}'.format(match_strategy))
     mapping, groups = {}, {}
     output_ids = set()
     for tracklet in sorted(tracklets, key=lambda item: (item.output_id, item.key)):
@@ -168,7 +177,7 @@ the stable numeric output IDs of group founders, so ties/order are reproducible.
         if eligible:
             for global_id, group in groups.items():
                 if group.eligible and not group.conflicts(tracklet):
-                    candidates.append((gallery.distance(group.gallery), global_id))
+                    candidates.append((gallery.distance(group.gallery, match_strategy), global_id))
         candidates.sort()
         if (candidates and candidates[0][0] < threshold
                 and (len(candidates) == 1 or candidates[1][0] - candidates[0][0] >= margin)):
@@ -179,4 +188,11 @@ the stable numeric output IDs of group founders, so ties/order are reproducible.
             global_id = tracklet.output_id
             groups[global_id] = FusionGroup(gallery, eligible, [tracklet])
         mapping[tracklet.key] = global_id
+        if decision_log is not None:
+            decision_log({'camera_id': tracklet.key[0], 'local_id': tracklet.key[1],
+                'global_id': global_id, 'action': 'match' if global_id != tracklet.output_id else 'new',
+                'strategy': match_strategy, 'threshold': threshold, 'margin': margin,
+                'samples': gallery.sample_count,
+                'candidates': [{'global_id': gid, 'distance': float(distance)}
+                               for distance, gid in candidates[:3]]})
     return mapping, groups
