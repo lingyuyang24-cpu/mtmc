@@ -1,0 +1,6 @@
+# 独立分析服务无需安装 PyTorch、YOLO 或 ReID 权重。
+fastapi>=0.115,<1
+uvicorn>=0.30,<1
+numpy>=1.26,<3
+Pillow>=10.4
+tzdata>=2024.1

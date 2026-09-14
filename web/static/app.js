@@ -17,7 +17,8 @@ function formatSize(bytes) {return bytes>=1024**3 ? `${(bytes/1024**3).toFixed(2
 function activeJob() {return state.jobs.find(job=>!terminal.has(job.status));}
 function setBusy(value) {state.busy=value; updateControls();}
 function updateControls() {
-  document.querySelectorAll('#job-form button, #job-form input, #job-form select, [role=tab]').forEach(el=>el.disabled=state.busy);
+  document.querySelectorAll('#job-form button, #job-form input, #job-form select').forEach(el=>el.disabled=state.busy);
+  for(const id of ['online-tab','offline-tab','showroom-link'])$(id).setAttribute('aria-disabled',String(state.busy || (id==='showroom-link'&&!$(id).hasAttribute('href'))));
   $('start').disabled=state.busy || !state.online || !!activeJob();
   $('min-frames').disabled=state.busy || state.mode==='online';
   $('offline-workers').disabled=state.busy || state.mode==='online';
@@ -25,16 +26,31 @@ function updateControls() {
   $('start').textContent=state.busy ? '正在提交…' : activeJob() ? '请等待或停止当前任务' : state.mode==='online' ? '开始在线追踪 →' : '开始离线追踪 →';
   $('stop').disabled=state.busy || state.selected?.status==='stopping';
 }
-function setMode(mode) {
+function setMode(mode, push=false) {
   if(state.busy)return;
+  mode=mode==='offline'?'offline':'online';
   state.mode=mode;
   for(const value of ['online','offline']) {
-    $(value+'-tab').setAttribute('aria-selected',String(value===mode));
-    $(value+'-tab').tabIndex=value===mode ? 0 : -1;
+    if(value===mode)$(value+'-tab').setAttribute('aria-current','page');
+    else $(value+'-tab').removeAttribute('aria-current');
     $(value+'-panel').hidden=value!==mode;
   }
+  const url=new URL(location.href);url.searchParams.set('mode',mode);
+  if(url.href!==location.href)history[push?'pushState':'replaceState'](null,'',url);
   $('source-title').textContent=mode==='online'?'接入视频流':'导入视频文件';
+  if(state.selected?.mode!==mode){
+    const job=state.jobs.find(j=>j.mode===mode&&!terminal.has(j.status))||state.jobs.find(j=>j.mode===mode);
+    if(job)selectJob(job);else clearJobView();
+  }
+  renderHistory();
   showError('form-error'); updateControls();
+}
+function clearJobView() {
+  clearCards();state.selected=null;
+  $('task-label').textContent='尚未启动任务';$('task-status').textContent='待接入';$('task-status').className='badge';
+  for(const key of ['cameras','frames','identities','fps'])$('metric-'+key).textContent='—';
+  for(const id of ['stop','progress-area','downloads'])$(id).hidden=true;
+  $('empty-view').hidden=false;showError('task-error');
 }
 function renderStreams() {
   $('streams').replaceChildren();
@@ -198,25 +214,31 @@ function renderJob(job) {
 }
 function renderHistory() {
   $('job-list').replaceChildren();
-  if(!state.jobs.length){$('job-list').append(node('p','muted','还没有追踪任务。'));return;}
-  for(const job of state.jobs){const row=node('button',`history-item${state.selected?.id===job.id?' selected':''}`),label=node('span','',`${job.mode==='online'?'实时在线':'离线视频'} / ${job.cameras.length} 路摄像头`);label.append(node('small','',new Date(job.created_at*1000).toLocaleString('zh-CN',{hour12:false})));row.append(label,node('span','',statusText[job.status]||job.status));row.onclick=()=>selectJob(job);$('job-list').append(row);}
+  const jobs=state.jobs.filter(job=>job.mode===state.mode);
+  if(!jobs.length){$('job-list').append(node('p','muted','此模块还没有追踪任务。'));return;}
+  for(const job of jobs){const row=node('button',`history-item${state.selected?.id===job.id?' selected':''}`),label=node('span','',`${job.mode==='online'?'实时在线':'离线视频'} / ${job.cameras.length} 路摄像头`);label.append(node('small','',new Date(job.created_at*1000).toLocaleString('zh-CN',{hour12:false})));row.append(label,node('span','',statusText[job.status]||job.status));row.onclick=()=>selectJob(job);$('job-list').append(row);}
 }
 async function refresh() {
   if(state.refreshing)return;state.refreshing=true;
   try{
     const [health,result]=await Promise.all([api('/api/health'),api('/api/jobs')]);
     state.online=true;state.limit=health.max_upload_bytes;state.jobs=result.jobs;
+    $('showroom-link').removeAttribute('href');
+    if(health.showroom_url){try{const url=new URL(health.showroom_url);if(['http:','https:'].includes(url.protocol))$('showroom-link').href=url.href;}catch{}}
+    $('showroom-link').title=$('showroom-link').hasAttribute('href')?'切换至独立展车分析':'请通过 --showroom-url 配置展车服务入口';
     $('health').textContent=health.model_files_ready?'服务已连接 · 权重就绪':'服务已连接 · 请配置本地模型';$('health').className='connection connected';
     let selected=state.jobs.find(j=>j.id===state.selected?.id);
     if(!selected&&state.selected)selected=await api(`/api/jobs/${state.selected.id}`);
-    if(selected)renderJob(selected);else if(!state.selected&&state.jobs.length)selectJob(activeJob()||state.jobs[0]);
+    if(selected&&selected.mode===state.mode)renderJob(selected);
+    else if(!state.selected){const job=state.jobs.find(j=>j.mode===state.mode&&!terminal.has(j.status))||state.jobs.find(j=>j.mode===state.mode);if(job)selectJob(job);}
     renderHistory();
   }catch(error){state.online=false;$('health').textContent='后端连接中断，正在重试…';$('health').className='connection';}
   finally{state.refreshing=false;updateControls();}
 }
 async function poll(){await refresh();setTimeout(poll,1200);}
-$('online-tab').onclick=()=>setMode('online');$('offline-tab').onclick=()=>setMode('offline');
-document.querySelector('[role=tablist]').onkeydown=e=>{if(['ArrowLeft','ArrowRight','Home','End'].includes(e.key)){e.preventDefault();setMode(e.key==='Home'?'online':e.key==='End'?'offline':state.mode==='online'?'offline':'online');$(state.mode+'-tab').focus();}};
+for(const mode of ['online','offline'])$(mode+'-tab').onclick=e=>{if(e.ctrlKey||e.metaKey||e.shiftKey||e.altKey)return;e.preventDefault();setMode(mode,true);};
+$('showroom-link').onclick=e=>{if(state.busy||!$('showroom-link').hasAttribute('href')){e.preventDefault();if(!state.busy)showError('form-error','请使用 --showroom-url 配置并启动独立展车服务。');}};
+window.addEventListener('popstate',()=>setMode(new URLSearchParams(location.search).get('mode')));
 $('add-stream').onclick=()=>{state.streams.push('');renderStreams();$(`stream-${state.streams.length-1}`).focus();};
 $('files').onchange=e=>{addFiles(e.target.files);e.target.value='';};
 $('dropzone').ondragover=e=>{e.preventDefault();$('dropzone').classList.add('drag');};
@@ -224,7 +246,7 @@ $('dropzone').ondragleave=()=>$('dropzone').classList.remove('drag');
 $('dropzone').ondrop=e=>{e.preventDefault();$('dropzone').classList.remove('drag');addFiles(e.dataTransfer.files);};
 $('job-form').onsubmit=submit;$('refresh').onclick=refresh;
 $('stop').onclick=async()=>{if(!state.selected)return;try{setBusy(true);const job=await api(`/api/jobs/${state.selected.id}/stop`,{method:'POST'});renderJob(job);}catch(e){showError('task-error',e.message);}finally{setBusy(false);}};
-renderStreams();setMode('online');poll();
+renderStreams();setMode(new URLSearchParams(location.search).get('mode'));poll();
 window.addEventListener('pagehide',clearCards);
 // 可用时暴露与页面一致的“配置”动作；不暗中启动推理，也不返回流密码。
 if(document.modelContext?.registerTool){

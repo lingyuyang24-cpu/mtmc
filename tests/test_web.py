@@ -92,6 +92,11 @@ class WebTests(unittest.TestCase):
         self.assertEqual(self.client.get('/static/app.js').status_code, 200)
         self.assertEqual(self.client.get('/api/health').json()['max_concurrent_jobs'], 1)
         self.assertEqual(self.client.get('/openapi.json').status_code, 200)
+        html = self.client.get('/?mode=offline').text
+        self.assertIn('class="module-sidebar"', html)
+        self.assertLess(html.index('id="online-tab"'), html.index('id="offline-tab"'))
+        self.assertLess(html.index('id="offline-tab"'), html.index('id="showroom-link"'))
+        self.assertEqual(self.client.get('/ui/module-nav.css').status_code, 200)
 
     def test_origin_and_host_boundaries(self):
         url = '/api/jobs/online'

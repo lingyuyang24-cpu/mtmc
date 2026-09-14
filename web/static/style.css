@@ -226,7 +226,7 @@ form {
   color:var(--muted);
 }
 
-section[role=tabpanel]>.muted {
+#online-panel>.muted,#offline-panel>.muted {
   margin-bottom:20px;
 }
 

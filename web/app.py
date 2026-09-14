@@ -96,6 +96,7 @@ def create_app(data_root=None, worker=None, max_upload_bytes=None):
         repo = Path(os.environ.get('MTMC_TRANSREID_REPO', ROOT / 'external/transreid/repo'))
         active = app.state.manager.active
         return {'status': 'ok', 'model_files_ready': detector.is_file() and reid.is_file() and (repo / 'model').is_dir(),
+                'showroom_url': os.environ.get('MTMC_SHOWROOM_URL'),
                 'max_upload_bytes': upload_limit, 'max_concurrent_jobs': 1,
                 'active_job_id': active['id'] if active else None,
                 'models': {'detector': detector.name, 'reid': 'TransReID MSMT17'},
@@ -172,6 +173,23 @@ def create_app(data_root=None, worker=None, max_upload_bytes=None):
     @app.get('/api/jobs/{job_id}')
     def job(job_id: str):
         return get_job(job_id)
+
+    @app.get('/api/jobs/{job_id}/events')
+    def tracking_events(job_id: str, cursor: str = '0:0', limit: int = 250):
+        from tracking_contracts.events import read_page
+        current = get_job(job_id)
+        if current['mode'] != 'online':
+            raise HTTPException(409, '此事件接口当前仅支持在线任务。')
+        try:
+            page = read_page(app.state.manager.directory(job_id)/'events', cursor, limit)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from None
+        except OSError:
+            raise HTTPException(503, '追踪事件日志暂不可读，请检查存储状态。') from None
+        page['job_status'] = current['status']
+        page['publisher_error'] = current.get('event_log',{}).get('error') or (
+            'UnclosedEventLog' if page.get('available') and current['status'] in TERMINAL and not page.get('closed') else None)
+        return page
 
     @app.post('/api/jobs/{job_id}/stop')
     def stop(job_id: str):
@@ -359,6 +377,7 @@ def create_app(data_root=None, worker=None, max_upload_bytes=None):
         return StreamingResponse(frames(), media_type='multipart/x-mixed-replace; boundary=frame')
 
     app.mount('/static', StaticFiles(directory=STATIC), name='static')
+    app.mount('/ui', StaticFiles(directory=ROOT / 'ui'), name='shared-ui')
 
     @app.get('/', include_in_schema=False)
     def index():

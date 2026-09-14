@@ -1,0 +1,85 @@
+/* Shared presentation only: tracking and showroom keep separate services/state. */
+.app-shell {
+  display: grid;
+  grid-template-columns: 184px minmax(0, 1fr);
+  min-height: calc(100vh - 76px);
+}
+.app-shell > main {
+  width: 100%;
+  min-width: 0;
+  margin: 0 auto;
+  padding: 30px 28px 20px;
+}
+.module-sidebar {
+  position: sticky;
+  top: 0;
+  align-self: start;
+  min-height: calc(100vh - 76px);
+  padding: 28px 12px;
+  background: #fff;
+  border-right: 1px solid #e0e7ec;
+}
+.module-heading {
+  margin: 0 12px 16px;
+  color: #7b8b99;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .12em;
+}
+.module-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.module-nav a {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 48px;
+  padding: 12px 14px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: #5b6f7d;
+  text-decoration: none;
+  font-size: 14px;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+.module-nav a:hover { background: #f2f6f7; }
+.module-nav a[aria-current="page"] {
+  color: #076d63;
+  background: #e8f4f0;
+  border-color: #d2e9e0;
+  box-shadow: inset 3px 0 #087b70;
+  font-weight: 650;
+}
+.module-nav a[aria-disabled="true"] { opacity: .55; cursor: not-allowed; }
+.module-nav a:focus-visible { outline: 3px solid #72bfae; outline-offset: 2px; }
+.module-icon { width: 18px; text-align: center; font-size: 17px; }
+.module-note { margin: 28px 12px 0; font-size: 11px; line-height: 1.8; color: #8997a2; }
+.app-shell .workspace { grid-template-columns: 310px minmax(0, 1fr); gap: 20px; }
+@media (max-width: 1200px) {
+  .app-shell > main { padding: 26px 20px; }
+  .app-shell .model-tag { display: none; }
+}
+@media (max-width: 1050px) {
+  .app-shell { grid-template-columns: 156px minmax(0, 1fr); }
+  .module-sidebar { padding: 24px 9px; }
+  .module-nav a { padding: 12px 10px; gap: 9px; }
+  .app-shell .workspace, .app-shell .two-columns { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 600px) {
+  .app-shell { grid-template-columns: 104px minmax(0, 1fr); }
+  .app-shell > main { padding: 20px 12px; }
+  .module-sidebar { padding: 24px 7px; }
+  .module-heading { margin: 0 7px 14px; font-size: 10px; }
+  .module-nav a { justify-content: center; padding: 12px 5px; font-size: 13px; }
+  .module-icon, .module-note { display: none; }
+  .app-shell .heading, .app-shell .section-title, .app-shell .result-toolbar { flex-wrap: wrap; }
+  .app-shell .storebar label { flex-wrap: wrap; width: 100%; }
+  .app-shell .storebar select { min-width: 0; width: 100%; }
+  .app-shell .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .app-shell .tabs { gap: 14px; flex-wrap: wrap; }
+  .app-shell .panel { padding: 14px; }
+  .app-shell .fields label { min-width: 0; flex-basis: 100%; }
+}

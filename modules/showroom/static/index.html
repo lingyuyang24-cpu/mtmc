@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MTMC · 展车分析</title>
+<link rel="stylesheet" href="/static/style.css?v=1.0.1">
+<link rel="stylesheet" href="/ui/module-nav.css?v=1">
+<script src="/static/app.js?v=module-nav-1" defer>
+</script>
+</head>
+<body>
+<header>
+<a class="brand" href="/">⌗ <strong>MTMC</strong>
+<span>展车分析</span>
+</a>
+</header>
+<div class="app-shell">
+<aside class="module-sidebar">
+  <p class="module-heading">功能模块</p>
+  <nav class="module-nav" aria-label="系统模块">
+    <a id="nav-online" aria-disabled="true" tabindex="0"><span class="module-icon" aria-hidden="true">◉</span>实时在线</a>
+    <a id="nav-offline" aria-disabled="true" tabindex="0"><span class="module-icon" aria-hidden="true">▷</span>离线追踪</a>
+    <a href="/" aria-current="page"><span class="module-icon" aria-hidden="true">▦</span>展车分析</a>
+  </nav>
+  <p class="module-note">独立模块 · 统一入口<br>特征仅保存在追踪内存</p>
+</aside>
+<main>
+  <div class="heading">
+<div>
+<p class="eyebrow">SHOWROOM INTELLIGENCE</p>
+<h1>从客户动线，看见展车关注。</h1>
+<p class="muted">独立分析 · 复用追踪 · 特征仅存内存</p>
+</div>
+<span id="connection" class="pill">连接中…</span>
+</div>
+  <div id="notice" role="status" hidden>
+</div>
+  <section class="storebar">
+<label>当前门店 <select id="stores">
+<option value="">请先创建门店</option>
+</select>
+</label>
+<button id="new-store" class="secondary">＋ 创建门店</button>
+</section>
+  <form id="store-form" class="panel" hidden>
+<h2>创建门店</h2>
+<div class="fields">
+<label>门店名称<input id="store-name" required maxlength="80" placeholder="例如：滨江体验中心">
+</label>
+<label>时区<input id="timezone" value="Asia/Shanghai" required>
+</label>
+<label>营业开始<input id="opens" type="time" value="09:00" required>
+</label>
+<label>营业结束<input id="closes" type="time" value="18:00" required>
+</label>
+<label>有效停留阈值 / 秒<input id="min-dwell" type="number" min="1" max="600" value="10" required>
+</label>
+</div>
+<button type="submit">创建</button>
+<p class="muted">一天内的营业时段用于覆盖率统计；日报包含该自然日的全部已收到数据。GID 会话不等于真实客户人数。</p>
+</form>
+  <nav class="tabs" aria-label="分析工作区">
+<button data-tab="overview" class="selected">实时概览</button>
+<button data-tab="configure">平面图与标定</button>
+<button data-tab="reports">每日报告</button>
+</nav>
+  <section id="overview" class="tab-panel">
+    <div class="two-columns">
+<section class="panel">
+<div class="section-title">
+<div>
+<h2>实时平面图</h2>
+<p class="muted">仅显示最近 10 秒位置，颜色表示展车区域，不推断视线。</p>
+</div>
+<span id="live-count" class="pill">0 个观察</span>
+</div>
+<div class="canvas-wrap">
+<canvas id="live-map" width="1000" height="650" aria-label="实时位置平面图">
+</canvas>
+</div>
+<p id="live-hint" class="muted">请先上传平面图并发布标定配置。</p>
+</section>
+    <section class="panel">
+<p class="eyebrow">READ-ONLY TRACKING FEED</p>
+<h2>连接在线追踪任务</h2>
+<p class="muted">先在追踪工作台启动在线任务，再在这里绑定。摄像头编号从 0 开始，必须与标定配置一致。</p>
+<label>在线任务<select id="jobs">
+<option value="">尚未读取任务</option>
+</select>
+</label>
+<div class="actions">
+<button id="refresh-jobs" class="secondary">刷新任务</button>
+<button id="bind">绑定分析</button>
+</div>
+<p class="note">新任务需重新确认摄像头顺序并绑定。暂停分析不会停止追踪，恢复后从保存的游标补读。</p>
+<div id="bindings" class="stack">
+</div>
+</section>
+</div>
+    <section class="panel">
+<h2>当前人员观察</h2>
+<p class="muted">同一 GID 的多镜头观察会分别显示；日报按运行 ID + GID 去重。可人工标记员工，生成日报时排除。</p>
+<div class="scroll">
+<table>
+<thead>
+<tr>
+<th>运行 / GID</th>
+<th>摄像头</th>
+<th>位置 / 米</th>
+<th>展车</th>
+<th>角色标记</th>
+</tr>
+</thead>
+<tbody id="positions">
+</tbody>
+</table>
+</div>
+</section>
+  </section>
+  <section id="configure" class="tab-panel" hidden>
+    <section class="panel">
+<div class="section-title">
+<div>
+<p class="eyebrow">01 / FLOOR PLAN</p>
+<h2>平面图与实际尺寸</h2>
+</div>
+<button id="load-layout" class="secondary">载入最近布局</button>
+</div>
+<div class="fields">
+<label>上传平面图（PNG / JPEG，≤ 8 MiB）<input id="floorplan-file" type="file" accept="image/png,image/jpeg">
+</label>
+<label>平面图宽 / 米<input id="map-width" type="number" min="0.1" max="2000" step="any" value="20">
+</label>
+<label>平面图高 / 米<input id="map-height" type="number" min="0.1" max="2000" step="any" value="13">
+</label>
+</div>
+<p class="note">原点为图左上角，向右为 X，向下为 Y；请使用覆盖同一矩形范围、无外部页边留白的平面图。发布后保留历史版本。</p>
+</section>
+    <div class="two-columns">
+<section class="panel">
+<div class="section-title">
+<h2>平面图编辑</h2>
+<span id="edit-mode" class="pill">选择绘制模式</span>
+</div>
+<div class="canvas-wrap">
+<canvas id="edit-map" width="1000" height="650" aria-label="点击绘制展车区域或摄像头地面对应点">
+</canvas>
+</div>
+<p id="edit-hint" class="muted">上传图片后，先绘制展车关注区域，或在右侧开始摄像头标定。</p>
+<div class="actions">
+<button id="undo" class="secondary">撤销最后一点</button>
+<button id="cancel-drawing" class="secondary">取消绘制</button>
+</div>
+</section>
+    <section class="panel">
+<p class="eyebrow">02 / VEHICLE ZONES</p>
+<h2>展车关注区域</h2>
+<div class="fields">
+<label>车辆编号<input id="vehicle-id" placeholder="car_01" maxlength="48">
+</label>
+<label>展车名称<input id="vehicle-name" placeholder="一号展车" maxlength="80">
+</label>
+<label>车型<input id="vehicle-model" placeholder="可选" maxlength="80">
+</label>
+</div>
+<p class="muted">绘制车辆周围可站立的关注区域，而非仅车身轮廓；区域重叠的观察会记为未知。</p>
+<div class="actions">
+<button id="draw-vehicle" class="secondary">开始绘制区域</button>
+<button id="finish-vehicle">保存区域</button>
+</div>
+<div id="vehicle-list" class="stack">
+</div>
+</section>
+</div>
+    <section class="panel">
+<p class="eyebrow">03 / GROUND CALIBRATION</p>
+<h2>摄像头 → 平面图标定</h2>
+<p class="muted">选择任务画面或上传摄像头截图。每组先点击左侧画面的地面点，再点击上方平面图的同一位置；至少 4 组分散、不共线的对应点。只能覆盖控制点包围的地面范围。</p>
+<div class="fields">
+<label>摄像头编号（从 0 开始）<input id="camera-id" type="number" min="0" max="10000" value="0">
+</label>
+<label>原视频宽 / 像素<input id="camera-width" type="number" min="16" max="16000" value="1920">
+</label>
+<label>原视频高 / 像素<input id="camera-height" type="number" min="16" max="16000" value="1080">
+</label>
+<label>或上传摄像头截图<input id="camera-file" type="file" accept="image/png,image/jpeg">
+</label>
+</div>
+<div class="actions">
+<button id="fetch-frame" class="secondary">读取所选任务画面</button>
+<button id="start-calibration" class="secondary">开始新标定</button>
+<button id="save-camera">保存摄像头标定</button>
+</div>
+<p class="note">预览可能缩小，点击坐标会换算到原视频尺寸。手工截图必须与原视频构图、比例一致，不可裁剪；发布前核对原视频宽高。</p>
+<div class="two-columns calibration">
+<div class="canvas-wrap">
+<canvas id="camera-map" width="1000" height="563" aria-label="点击摄像头地面对应点">
+</canvas>
+</div>
+<div>
+<p id="point-hint" class="muted">等待标定</p>
+<ol id="points">
+</ol>
+<div id="camera-list" class="stack">
+</div>
+</div>
+</div>
+</section>
+    <section class="panel">
+<p class="eyebrow">04 / PUBLISH</p>
+<h2>发布版本</h2>
+<div class="fields">
+<label>生效时间（浏览器本地时区）<input id="effective" type="datetime-local" step="1" required>
+</label>
+</div>
+<p class="muted">首次配置可设为任务开始之前；已有分析数据时，新版本必须晚于最后处理时间。历史布局不会被覆盖。</p>
+<div class="actions">
+<button id="publish">发布布局</button>
+<button id="export-config" class="secondary">导出配置 JSON</button>
+<label class="file-button">导入配置 JSON<input id="import-config" type="file" accept="application/json,.json">
+</label>
+</div>
+<details>
+<summary>查看当前待发布配置</summary>
+<pre id="config-preview">
+</pre>
+</details>
+<p id="published" class="muted">
+</p>
+</section>
+  </section>
+  <section id="reports" class="tab-panel" hidden>
+<section class="panel">
+<div class="section-title">
+<div>
+<p class="eyebrow">DAILY REVIEW</p>
+<h2>当日数据，一份报告。</h2>
+<p class="muted">默认门店当地时间 00:10 后生成昨日 HTML 与 JSON；运行期间补算近 30 天。今天生成的是动态草稿。</p>
+</div>
+</div>
+<div class="actions">
+<label>报告日期<input id="report-day" type="date">
+</label>
+<button id="generate">生成 / 更新日报</button>
+<button id="refresh-reports" class="secondary">刷新历史</button>
+</div>
+<div id="report-summary">
+</div>
+<div id="report-history" class="stack">
+</div>
+</section>
+</section>
+  <footer>MTMC / 独立展车模块 <span>区域停留是行为证据，不是购买意愿概率。仅供受信任的本机 / 内网使用。</span>
+</footer>
+</main>
+</div>
+<dialog id="confirm-dialog">
+<h2>确认操作</h2>
+<p id="confirm-message">
+</p>
+<div class="actions">
+<button id="confirm-no" class="secondary">取消</button>
+<button id="confirm-yes">确认</button>
+</div>
+</dialog>
+</body>
+</html>

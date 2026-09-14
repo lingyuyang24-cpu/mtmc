@@ -296,6 +296,7 @@ def run_offline(spec, detector, encoder, reporter, *, model_factory=None):
 
 
 def run_online(spec, detector, encoder, reporter):
+    from tracking_contracts.events import EventWriter, frame_event
     sources, options = spec['sources'], spec['options']
     args = parse_args(['--streams', *sources, '--display', 'false', '--encoder-batch-size', str(options['batch_size'])])
     trackers = [CameraTracker(i, detector, encoder, args) for i in range(len(sources))]
@@ -308,6 +309,8 @@ def run_online(spec, detector, encoder, reporter):
     last_seq, last_seen = [-1] * len(sources), [time.monotonic()] * len(sources)
     log_path = Path(spec['directory']) / 'artifacts' / 'tracks.jsonl'
     frames = 0
+    event_writer = EventWriter(Path(spec['directory'])/'events', Path(spec['directory']).name)
+    last_health = 0.
     try:
         for publisher in publishers:
             publisher.start()
@@ -334,8 +337,11 @@ def run_online(spec, detector, encoder, reporter):
                     last_seq[camera_id], last_seen[camera_id] = seq, time.monotonic()
                     # 原画发布队列也引用此帧；标注必须使用副本，避免跨线程读写像素。
                     frame = frame.copy()
+                    camera['source_width'], camera['source_height'] = frame.shape[1], frame.shape[0]
                     tracks = tracker.process(frame)
                     assignments = global_ids.update_camera(camera_id, tracks, timestamp)
+                    event_writer.submit(frame_event(camera_id, seq, timestamp, frame.shape[1],
+                                                    frame.shape[0], tracks, assignments, capture_stats))
                     for track in tracks:
                         gid = assignments[track['local_id']]
                         log.write(json.dumps({'camera_id': camera_id, 'frame': seq, 'timestamp': timestamp,
@@ -347,6 +353,15 @@ def run_online(spec, detector, encoder, reporter):
                     camera['inference_age_ms'] = max(0, round((time.time()-timestamp)*1000))
                     reporter.preview(camera_id, frame, camera['frames'] + 1, len(tracks))
                 now = time.monotonic()
+                if now-last_health >= 1:
+                    event_writer.submit({'type': 'health', 'timestamp': time.time(),
+                                         'cameras': [{'camera_id': i,
+                                                      'decoded_frames': r.stats().get('decoded_frames', 0),
+                                                      'last_capture_time': r.stats().get('last_capture_time'),
+                                                      'inference_skipped': r.stats().get('inference_skipped', 0)}
+                                                     for i, r in enumerate(readers)]})
+                    last_health = now
+                reporter.state['event_log'] = {'dropped': event_writer.dropped, 'error': event_writer.error}
                 if all((time.time()-reader.stats()['last_capture_time']
                         if reader.stats().get('last_capture_time') else now-last_seen[i]) > 30
                        for i, reader in enumerate(readers)):
@@ -363,3 +378,4 @@ def run_online(spec, detector, encoder, reporter):
             reader.stop()
         for publisher in publishers:
             publisher.stop()
+        event_writer.close()
