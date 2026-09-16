@@ -11,7 +11,7 @@ import uuid
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 from starlette.middleware.trustedhost import TrustedHostMiddleware
@@ -197,14 +197,24 @@ def create_app(data_root=None, worker=None, max_upload_bytes=None):
         return app.state.manager.stop(job_id)
 
     @app.get('/api/jobs/{job_id}/cameras/{camera_id}/frame.jpg')
-    def frame(job_id: str, camera_id: int):
+    def frame(job_id: str, camera_id: int, v: int | None = None):
         current = get_job(job_id)
         if not 0 <= camera_id < len(current['cameras']):
             raise HTTPException(404, '摄像头不存在。')
-        path = app.state.manager.directory(job_id) / 'previews' / f'{camera_id}.jpg'
+        preview_dir = app.state.manager.directory(job_id) / 'previews'
+        version = v if v is not None else int(current['cameras'][camera_id].get('preview_version', 0))
+        versioned = preview_dir / f'{camera_id}-{version}.jpg'
+        legacy = preview_dir / f'{camera_id}.jpg'
+        path = versioned if version > 0 and versioned.is_file() else legacy
         if not path.is_file():
             raise HTTPException(404, '尚未收到画面。')
-        return FileResponse(path, media_type='image/jpeg')
+        # Read and close the file before the response is streamed so the worker
+        # can retire old previews on Windows without colliding with a file lock.
+        try:
+            content = path.read_bytes()
+        except OSError:
+            raise HTTPException(503, '预览画面正在更新，请稍后重试。') from None
+        return Response(content, media_type='image/jpeg', headers={'Cache-Control': 'no-store'})
 
     def artifact_path(job_id, name):
         current = get_job(job_id)

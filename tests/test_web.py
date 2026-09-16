@@ -1,5 +1,7 @@
 """Web API / 进程生命周期 / 流式离线推理，不下载模型权重。"""
 import json
+from decimal import Decimal
+from html.parser import HTMLParser
 from pathlib import Path
 import queue
 import tempfile
@@ -14,7 +16,7 @@ from fastapi.testclient import TestClient
 
 from web.app import create_app
 from web.jobs import JobManager, TERMINAL, write_json
-from web.pipeline import run_offline, run_online
+from web.pipeline import build_global_id_manager, build_stream_args, run_offline, run_online
 from web.schemas import TrackingOptions
 from web.worker import Cancelled, Reporter
 from demo_stream import LatestFrameReader
@@ -28,6 +30,59 @@ class Detector:
 class Encoder:
     def __call__(self, frame, boxes, camera_id=None):
         return np.array([[1., 0.] for box in boxes], dtype=np.float32)
+
+
+class NumberInputParser(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.inputs = []
+
+    def handle_starttag(self, tag, attrs):
+        attributes = dict(attrs)
+        if tag == 'input' and attributes.get('type') == 'number':
+            self.inputs.append(attributes)
+
+
+class ParameterTests(unittest.TestCase):
+    def test_frontend_number_defaults_pass_native_form_validation(self):
+        parser = NumberInputParser()
+        parser.feed((Path(__file__).parents[1] / 'web/static/index.html').read_text(encoding='utf-8'))
+        self.assertTrue(parser.inputs)
+        for field in parser.inputs:
+            with self.subTest(field=field.get('id')):
+                value = Decimal(field['value'])
+                minimum = Decimal(field.get('min', '0'))
+                maximum = Decimal(field['max']) if 'max' in field else None
+                step = Decimal(field.get('step', '1'))
+                self.assertGreaterEqual(value, minimum)
+                if maximum is not None:
+                    self.assertLessEqual(value, maximum)
+                self.assertEqual((value - minimum) % step, 0)
+
+    def test_web_defaults_match_high_accuracy_profile(self):
+        options = TrackingOptions()
+        self.assertEqual(options.confidence, .20)
+        self.assertEqual(options.detector_imgsz, 1280)
+        self.assertEqual(options.batch_size, 2)
+        self.assertEqual(options.reid_threshold, .35)
+        self.assertEqual(options.global_gallery_match, 'adaptive')
+        self.assertEqual(options.global_prototype_count, 6)
+        self.assertEqual(options.same_camera_reconnect_distance, 1.)
+        self.assertEqual(options.offline_identity_mode, 'streaming')
+
+    def test_all_online_parameters_reach_runtime_objects(self):
+        options = TrackingOptions(
+            tracker_max_age=47, global_prototype_count=9,
+            global_borderline_confirm_frames=21,
+            same_camera_reconnect_distance=1.25).model_dump()
+        args = build_stream_args(['video.mp4'], options)
+        manager = build_global_id_manager(args)
+        self.assertEqual(args.stream_mode, 'queue')
+        self.assertEqual(args.stream_queue_size, 2)
+        self.assertEqual(args.tracker_max_age, 47)
+        self.assertEqual(manager.prototype_count, 9)
+        self.assertEqual(manager.borderline_confirm_frames, 21)
+        self.assertEqual(manager.same_camera_reconnect_distance, 1.25)
 
 
 def pipeline_worker(spec, events, cancel):
@@ -148,11 +203,16 @@ class WebTests(unittest.TestCase):
         job=await_terminal(self.client,job_id)
         self.assertEqual(job['status'],'completed',job)
         self.assertEqual(job['processed_frames'],27)
-        self.assertEqual(job['offline_workers'],2)
-        self.assertEqual(job['identity_count'],1)
+        self.assertEqual(job['offline_workers'],1)
+        self.assertEqual(job['identity_count'],0)  # 10-frame clips end before the 1 s GID delay.
         self.assertEqual(len(job['artifacts']),8)
         mapping=self.client.get(f'/api/jobs/{job_id}/artifacts/id_mapping.json').json()
-        self.assertEqual({t['global_id'] for t in mapping['tracks']},{1})
+        self.assertEqual(mapping['identity_mode'],'terminal_compatible')
+        self.assertEqual(mapping['timing_mode'],'capture_wall_clock')
+        self.assertEqual(mapping['stream_mode'],'queue')
+        self.assertEqual(mapping['stream_queue_size'],2)
+        self.assertEqual(mapping['frame_index_base'],1)
+        self.assertEqual({t['global_id'] for t in mapping['tracks']},{None})
         self.assertEqual({t['camera_id'] for t in mapping['tracks']},{0,1,2})
         for i in range(3):
             frame=self.client.get(f'/api/jobs/{job_id}/cameras/{i}/frame.jpg')
@@ -189,6 +249,23 @@ class WebTests(unittest.TestCase):
 
 
 class LifecycleTests(unittest.TestCase):
+    def test_preview_uses_versioned_files_while_previous_image_is_open(self):
+        with tempfile.TemporaryDirectory() as root:
+            directory = Path(root)
+            (directory/'previews').mkdir()
+            (directory/'artifacts').mkdir()
+            spec = {'directory':root, 'names':['cam'], 'sources':['video.mp4'],
+                    'options':TrackingOptions().model_dump()}
+            reporter = Reporter(spec, queue.Queue(), threading.Event())
+            frame = np.zeros((32, 32, 3), dtype=np.uint8)
+            reporter.preview(0, frame, 1, 0, force=True)
+            first = directory/'previews/0-1.jpg'
+            with first.open('rb') as open_preview:
+                reporter.preview(0, frame, 2, 0, force=True)
+                self.assertTrue(open_preview.read(2).startswith(b'\xff\xd8'))
+            self.assertTrue((directory/'previews/0-2.jpg').is_file())
+            self.assertEqual(reporter.state['cameras'][0]['preview_version'], 2)
+
     def test_ffmpeg_timeouts_are_passed_during_open(self):
         reader=LatestFrameReader('rtsp://camera/live',0,stream_timeout_ms=1234)
         with patch('demo_stream.cv2.VideoCapture') as capture:
@@ -287,10 +364,16 @@ class LifecycleTests(unittest.TestCase):
                 original(**values)
                 if reporter.state['processed_frames']>=24:cancel.set()
             reporter.emit=emit
-            with patch('web.pipeline.LatestFrameReader',Reader),self.assertRaises(Cancelled):
+            with (patch('web.pipeline.LatestFrameReader', Reader),
+                  patch('web.pipeline.configure_ffmpeg_low_latency') as configure,
+                  self.assertRaises(Cancelled)):
                 run_online(spec,Detector(),Encoder(),reporter)
+            configure.assert_called_once()
+            configured_args = configure.call_args.args[0]
+            self.assertEqual(configured_args.rtsp_transport, 'tcp')
+            self.assertTrue(configured_args.ffmpeg_low_delay)
             self.assertEqual(reporter.state['processed_frames'],24)
-            self.assertTrue((Path(root)/'previews/1.jpg').exists())
+            self.assertTrue(list((Path(root)/'previews').glob('1-*.jpg')))
             rows=[json.loads(line) for line in (Path(root)/'artifacts/tracks.jsonl').read_text().splitlines()]
             self.assertEqual({row['camera_id'] for row in rows},{0,1})
             # 发布线程持有原图时，推理/绘制不能修改同一数组。

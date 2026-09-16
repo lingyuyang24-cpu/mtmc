@@ -56,7 +56,9 @@ class ParallelOfflineTests(unittest.TestCase):
         (directory/'previews').mkdir()
         (directory/'artifacts').mkdir()
         spec = {'directory':str(directory), 'sources':self.sources, 'names':['a','b','c'],
-                'options':TrackingOptions(offline_workers=workers, min_reid_frames=2).model_dump()}
+                'options':TrackingOptions(offline_identity_mode='posthoc',
+                                          offline_workers=workers,
+                                          min_reid_frames=2).model_dump()}
         reporter = Reporter(spec, queue.Queue(maxsize=1024), threading.Event())
         return spec, reporter
 

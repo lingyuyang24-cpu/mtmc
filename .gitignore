@@ -38,7 +38,7 @@ external/transreid/weights/
 
 # 视频、上传内容、追踪结果及日志保留在本机
 videos/
-web_data/
+web_data*/
 runs/
 outputs/
 *.log

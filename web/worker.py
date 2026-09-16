@@ -44,6 +44,7 @@ class Reporter:
         self.started = time.monotonic()
         self.last_send = 0
         self.last_preview = {}
+        self.preview_files = {}
         self.state = {'status': 'running', 'message': '正在追踪…', 'processed_frames': 0,
                       'identity_count': 0, 'fps': 0, 'progress': None,
                       'cameras': [{'id': i, 'name': name, 'status': 'waiting', 'frames': 0,
@@ -82,12 +83,23 @@ class Reporter:
                 frame = cv2.resize(frame, (max(1, round(width * scale)), max(1, round(height * scale))))
             ok, encoded = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
             if ok:
-                path = self.directory / 'previews' / f'{camera_id}.jpg'
-                temporary = path.with_suffix('.tmp')
+                # Use immutable versioned files. Windows cannot replace a fixed
+                # JPEG while FileResponse/browser/antivirus still has it open.
+                version = camera['preview_version'] + 1
+                path = self.directory / 'previews' / f'{camera_id}-{version}.jpg'
+                temporary = self.directory / 'previews' / f'{camera_id}-{version}.tmp'
                 temporary.write_bytes(encoded.tobytes())
                 temporary.replace(path)
-                camera['preview_version'] += 1
+                camera['preview_version'] = version
                 self.last_preview[camera_id] = now
+                retained = self.preview_files.setdefault(camera_id, [])
+                retained.append(path)
+                while len(retained) > 12:
+                    try:
+                        retained[0].unlink(missing_ok=True)
+                        retained.pop(0)
+                    except PermissionError:
+                        break
 
     def artifacts(self):
         return [{'name': p.name, 'size': p.stat().st_size}

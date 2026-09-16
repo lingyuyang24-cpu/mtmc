@@ -5,7 +5,7 @@
   <title>MTMC · 多摄像头追踪工作台</title>
   <meta name="description" content="实时多路视频流追踪与离线视频跨摄像头身份关联。">
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230d1829'/%3E%3Cpath d='M6 13V6h7M19 6h7v7M26 19v7h-7M13 26H6v-7' fill='none' stroke='%2361dacb' stroke-width='3'/%3E%3C/svg%3E">
-  <link rel="stylesheet" href="/static/style.css"><link rel="stylesheet" href="/ui/module-nav.css?v=1"><script src="/static/media.js" defer></script><script src="/static/app.js?v=module-nav-1" defer></script>
+  <link rel="stylesheet" href="/static/style.css?v=accuracy-5"><link rel="stylesheet" href="/ui/module-nav.css?v=1"><script src="/static/media.js" defer></script><script src="/static/app.js?v=accuracy-5" defer></script>
 </head>
 <body>
 <header class="topbar"><a class="brand" href="/" aria-label="MTMC 首页"><span class="brand-icon">⌗</span><strong>MTMC</strong><span class="brand-sub">多摄像头追踪工作台</span></a><span id="health" class="connection">正在连接后端…</span></header>
@@ -27,7 +27,72 @@
         <div class="form-heading"><h2 id="source-title">接入视频流</h2><span class="step">01 / 输入源</span></div>
         <section id="online-panel" aria-labelledby="online-tab"><p class="muted">支持 RTSP、HTTP 和 HTTPS。每个地址对应一个摄像头。</p><div id="streams"></div><button id="add-stream" class="secondary full" type="button">＋ 添加视频流</button></section>
         <section id="offline-panel" aria-labelledby="offline-tab" hidden><p class="muted">一次选择多个视频，也可继续添加。每个文件视为一个摄像头。</p><label class="upload-zone" id="dropzone"><span class="upload-symbol">↥</span><strong>选择或拖入视频文件</strong><span>MP4 · AVI · MOV · MKV · WEBM · M4V</span><input id="files" type="file" accept=".mp4,.avi,.mov,.mkv,.webm,.m4v" multiple></label><div id="file-list"></div></section>
-        <details class="parameters"><summary>追踪参数 <span>02 / 模型</span></summary><div class="field"><label for="confidence">检测置信度</label><input id="confidence" type="number" min="0.05" max="1" step="0.05" value="0.35"></div><div class="field"><label for="threshold">跨镜匹配阈值</label><input id="threshold" type="number" min="0.01" max="1" step="0.01" value="0.3"></div><p class="muted">余弦距离阈值越小，身份合并越保守。</p><div class="field"><label for="batch-size">特征提取批大小</label><select id="batch-size"><option>1</option><option>2</option><option selected>4</option><option>8</option><option>16</option></select></div><div class="field"><label for="min-frames">离线身份融合最少特征帧</label><input id="min-frames" type="number" min="1" max="64" value="10"></div><div id="offline-concurrency" hidden><div class="field"><label for="offline-workers">离线并行路数</label><select id="offline-workers"><option value="1">1 路（低内存）</option><option value="2" selected>2 路（默认）</option><option value="3">3 路</option><option value="4">4 路</option></select></div><p class="muted">每路使用独立模型；超出路数的文件排队。并行路数越高，内存和显存占用越高。</p></div></details>
+        <details class="parameters" open>
+          <summary>追踪参数 <span>02 / 高准确率</span></summary>
+          <div class="parameter-toolbar"><p>默认值已与 <code>start_accuracy.ps1</code> 对齐。</p><button id="accuracy-preset" class="text-button" type="button">恢复推荐值</button></div>
+
+          <details class="parameter-group" open>
+            <summary>检测与特征提取 <span>通用</span></summary>
+            <div class="field"><label for="confidence">检测置信度<small>降低漏检，低分框不能独立建轨</small></label><input id="confidence" data-option="confidence" type="number" min="0.05" max="1" step="0.05" value="0.20"></div>
+            <div class="field"><label for="detector-imgsz">检测分辨率<small>远处小目标建议 1280</small></label><select id="detector-imgsz" data-option="detector_imgsz" data-type="int"><option>640</option><option>960</option><option selected>1280</option><option>1536</option></select></div>
+            <div class="field"><label for="batch-size">特征提取批大小<small>显存不足时降为 1</small></label><select id="batch-size" data-option="batch_size" data-type="int"><option>1</option><option selected>2</option><option>4</option><option>8</option><option>16</option></select></div>
+          </details>
+
+          <details class="parameter-group">
+            <summary>本地轨迹质量 <span>通用</span></summary>
+            <div class="field"><label for="deep-sort-distance">Deep SORT 外观距离</label><input id="deep-sort-distance" data-option="deep_sort_max_cosine_distance" type="number" min="0.01" max="2" step="0.01" value="0.20"></div>
+            <div class="field"><label for="tracker-max-age">轨迹最大丢失帧数</label><input id="tracker-max-age" data-option="tracker_max_age" data-type="int" type="number" min="1" max="600" step="1" value="30"></div>
+            <div class="field"><label for="nms-overlap">NMS 最大重叠</label><input id="nms-overlap" data-option="nms_max_overlap" type="number" min="0" max="1" step="0.01" value="0.35"></div>
+            <div class="field"><label for="new-track-confidence">新轨迹最低置信度</label><input id="new-track-confidence" data-option="tracker_new_track_min_confidence" type="number" min="0" max="1" step="0.05" value="0.25"></div>
+            <div class="field"><label for="duplicate-containment">重复框包含比例</label><input id="duplicate-containment" data-option="track_duplicate_containment" type="number" min="0" max="1" step="0.01" value="0.85"></div>
+            <div class="field"><label for="duplicate-distance">重复框外观距离</label><input id="duplicate-distance" data-option="track_duplicate_max_cosine_distance" type="number" min="0" max="2" step="0.01" value="0.15"></div>
+          </details>
+
+          <details class="parameter-group" open>
+            <summary>全局身份匹配 <span>直接 GID</span></summary>
+            <div class="field"><label for="threshold">常规匹配阈值<small>越小越保守</small></label><input id="threshold" data-option="reid_threshold" type="number" min="0.01" max="1" step="0.01" value="0.35"></div>
+            <div class="field"><label for="global-margin">候选最小差距</label><input id="global-margin" data-option="global_reid_margin" type="number" min="0" max="1" step="0.01" value="0.02"></div>
+            <div class="field streaming-only"><label for="strong-threshold">强匹配阈值</label><input id="strong-threshold" data-option="global_reid_strong_threshold" type="number" min="0.01" max="1" step="0.01" value="0.25"></div>
+            <div class="field streaming-only"><label for="candidate-threshold">候选检索上限</label><input id="candidate-threshold" data-option="global_candidate_threshold" type="number" min="0.01" max="2" step="0.01" value="0.45"></div>
+            <div class="field streaming-only"><label for="gallery-match">图库匹配策略</label><select id="gallery-match" data-option="global_gallery_match" data-type="string"><option>topk</option><option>centroid</option><option>hybrid</option><option selected>adaptive</option><option>bidirectional</option></select></div>
+            <div class="field streaming-only"><label for="prototype-count">每个身份原型数</label><input id="prototype-count" data-option="global_prototype_count" data-type="int" type="number" min="0" max="64" step="1" value="6"></div>
+            <div class="field streaming-only"><label for="prototype-merge">原型合并阈值</label><input id="prototype-merge" data-option="global_prototype_merge_threshold" type="number" min="0" max="2" step="0.01" value="0.15"></div>
+          </details>
+
+          <details class="parameter-group streaming-only">
+            <summary>临界候选与特征质量 <span>直接 GID</span></summary>
+            <div class="field"><label for="borderline-frames">临界确认帧数</label><input id="borderline-frames" data-option="global_borderline_confirm_frames" data-type="int" type="number" min="1" max="300" step="1" value="15"></div>
+            <div class="field"><label for="borderline-ratio">临界支持比例</label><input id="borderline-ratio" data-option="global_borderline_confirm_ratio" type="number" min="0.01" max="1" step="0.01" value="0.80"></div>
+            <div class="field"><label for="borderline-threshold">临界确认阈值</label><input id="borderline-threshold" data-option="global_borderline_confirm_threshold" type="number" min="0.01" max="2" step="0.01" value="0.35"></div>
+            <div class="field"><label for="feature-confidence">入库最低置信度</label><input id="feature-confidence" data-option="global_feature_min_confidence" type="number" min="0" max="1" step="0.05" value="0.60"></div>
+            <div class="field"><label for="feature-box-height">入库最小框高</label><input id="feature-box-height" data-option="global_feature_min_box_height" data-type="int" type="number" min="1" max="4096" step="1" value="96"></div>
+            <div class="field"><label for="feature-occlusion">最大遮挡比例</label><input id="feature-occlusion" data-option="global_feature_max_occlusion" type="number" min="0" max="1" step="0.05" value="0.20"></div>
+            <div class="field"><label for="feature-update-distance">图库更新距离上限</label><input id="feature-update-distance" data-option="global_feature_update_max_distance" type="number" min="0.01" max="2" step="0.01" value="0.35"></div>
+          </details>
+
+          <details class="parameter-group streaming-only">
+            <summary>同摄像头断轨重连 <span>直接 GID</span></summary>
+            <div class="field"><label for="reconnect-enabled">启用重连</label><select id="reconnect-enabled" data-option="same_camera_reconnect" data-type="bool"><option value="true" selected>启用</option><option value="false">关闭</option></select></div>
+            <div class="field"><label for="reconnect-timeout">身份保留秒数</label><input id="reconnect-timeout" data-option="same_camera_reconnect_timeout" type="number" min="0" max="86400" step="1" value="1800"></div>
+            <div class="field"><label for="reconnect-distance">位置移动比例上限</label><input id="reconnect-distance" data-option="same_camera_reconnect_distance" type="number" min="0" max="10" step="0.05" value="1.00"></div>
+            <div class="field"><label for="reconnect-reid">重连外观阈值</label><input id="reconnect-reid" data-option="same_camera_reconnect_reid_threshold" type="number" min="0.01" max="2" step="0.01" value="0.50"></div>
+            <div class="field"><label for="reconnect-margin">重连候选差距</label><input id="reconnect-margin" data-option="same_camera_reconnect_reid_margin" type="number" min="0" max="1" step="0.01" value="0.05"></div>
+            <div class="field"><label for="reconnect-frames">重连确认帧数</label><input id="reconnect-frames" data-option="same_camera_reconnect_confirm_frames" data-type="int" type="number" min="1" max="300" step="1" value="10"></div>
+            <div class="field"><label for="reconnect-ratio">重连支持比例</label><input id="reconnect-ratio" data-option="same_camera_reconnect_confirm_ratio" type="number" min="0.01" max="1" step="0.01" value="0.80"></div>
+            <div class="field"><label for="reconnect-confirm-threshold">重连确认阈值</label><input id="reconnect-confirm-threshold" data-option="same_camera_reconnect_confirm_threshold" type="number" min="0.01" max="2" step="0.01" value="0.50"></div>
+            <div class="field"><label for="conflict-continuity">同镜冲突连续性（秒）</label><input id="conflict-continuity" data-option="same_camera_conflict_continuity" type="number" min="0" max="300" step="0.5" value="5.0"></div>
+          </details>
+
+          <details id="offline-concurrency" class="parameter-group offline-only" data-mode="offline" hidden>
+            <summary>离线融合与性能 <span>离线</span></summary>
+            <div class="field"><label for="offline-identity-mode">GID 生成方式<small>推荐直接使用终端匹配链路</small></label><select id="offline-identity-mode" data-option="offline_identity_mode" data-type="string"><option value="streaming" selected>直接 GID（推荐）</option><option value="posthoc">两阶段融合（旧版）</option></select></div>
+            <p id="offline-mode-help" class="muted">使用与 start_accuracy.ps1 相同的 queue=2、采集时间轴和 GlobalIDManager，预览与输出直接显示 GID。</p>
+            <div class="field posthoc-only" hidden><label for="min-frames">身份融合最少特征帧</label><input id="min-frames" data-option="min_reid_frames" data-type="int" type="number" min="1" max="64" value="10"></div>
+            <div class="field posthoc-only" hidden><label for="offline-gallery-size">代表特征图库容量</label><input id="offline-gallery-size" data-option="offline_gallery_size" data-type="int" type="number" min="1" max="256" value="32"></div>
+            <div class="field posthoc-only" hidden><label for="offline-gallery-match">图库匹配策略</label><select id="offline-gallery-match" data-option="offline_gallery_match" data-type="string"><option>pairwise</option><option selected>bidirectional</option></select></div>
+            <div class="field posthoc-only" hidden><label for="offline-workers">离线并行路数</label><select id="offline-workers" data-option="offline_workers" data-type="int"><option value="1">1 路（低显存）</option><option value="2" selected>2 路（推荐）</option><option value="3">3 路</option><option value="4">4 路</option></select></div>
+          </details>
+        </details>
         <div id="form-error" class="error" role="alert" hidden></div><button class="primary full" id="start" type="submit">开始在线追踪 <span>→</span></button><p class="local-note">本地推理 · 视频与模型数据保留在本机</p>
       </form>
     </aside>

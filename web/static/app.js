@@ -20,9 +20,12 @@ function updateControls() {
   document.querySelectorAll('#job-form button, #job-form input, #job-form select').forEach(el=>el.disabled=state.busy);
   for(const id of ['online-tab','offline-tab','showroom-link'])$(id).setAttribute('aria-disabled',String(state.busy || (id==='showroom-link'&&!$(id).hasAttribute('href'))));
   $('start').disabled=state.busy || !state.online || !!activeJob();
-  $('min-frames').disabled=state.busy || state.mode==='online';
-  $('offline-workers').disabled=state.busy || state.mode==='online';
-  $('offline-concurrency').hidden=state.mode==='online';
+  document.querySelectorAll('[data-mode]').forEach(container=>{
+    const inactive=container.dataset.mode!==state.mode;
+    container.hidden=inactive;
+    container.querySelectorAll('input,select,button').forEach(el=>el.disabled=state.busy||inactive);
+  });
+  syncOfflineIdentityMode();
   $('start').textContent=state.busy ? '正在提交…' : activeJob() ? '请等待或停止当前任务' : state.mode==='online' ? '开始在线追踪 →' : '开始离线追踪 →';
   $('stop').disabled=state.busy || state.selected?.status==='stopping';
 }
@@ -90,7 +93,38 @@ function upload(file, index, total) {
     xhr.send(file);
   });
 }
-function selectedOptions() {return {confidence:Number($('confidence').value),reid_threshold:Number($('threshold').value),batch_size:Number($('batch-size').value),min_reid_frames:Number($('min-frames').value),offline_workers:Number($('offline-workers').value)};}
+function selectedOptions() {
+  const options={};
+  document.querySelectorAll('[data-option]').forEach(el=>{
+    const type=el.dataset.type||'float';
+    options[el.dataset.option]=type==='string'?el.value:type==='bool'?el.value==='true':type==='int'?Number.parseInt(el.value,10):Number(el.value);
+  });
+  return options;
+}
+
+function restoreAccuracyPreset() {
+  document.querySelectorAll('[data-option]').forEach(el=>{
+    el.value=el.tagName==='SELECT'?(el.querySelector('option[selected]')?.value||el.options[0].value):el.defaultValue;
+  });
+  showError('form-error');
+  updateControls();
+}
+
+function syncOfflineIdentityMode() {
+  const posthoc=state.mode==='offline'&&$('offline-identity-mode').value==='posthoc';
+  document.querySelectorAll('.streaming-only').forEach(container=>{
+    container.hidden=posthoc;
+    container.querySelectorAll('input,select,button').forEach(el=>el.disabled=state.busy||posthoc);
+  });
+  document.querySelectorAll('.posthoc-only').forEach(container=>{
+    const visible=state.mode==='offline'&&posthoc;
+    container.hidden=!visible;
+    container.querySelectorAll('input,select,button').forEach(el=>el.disabled=state.busy||!visible);
+  });
+  $('offline-mode-help').textContent=posthoc
+    ? '旧版先显示 LID，全部视频追踪结束后统一融合并重绘 GID；仅用于结果对照。'
+    : '使用与 start_accuracy.ps1 相同的 queue=2、采集时间轴和 GlobalIDManager，预览与输出直接显示 GID。';
+}
 function validateStreams(values) {
   if(!values.length)throw new Error('请至少添加一路流地址。');
   return values.map((raw,i)=>{
@@ -244,7 +278,8 @@ $('files').onchange=e=>{addFiles(e.target.files);e.target.value='';};
 $('dropzone').ondragover=e=>{e.preventDefault();$('dropzone').classList.add('drag');};
 $('dropzone').ondragleave=()=>$('dropzone').classList.remove('drag');
 $('dropzone').ondrop=e=>{e.preventDefault();$('dropzone').classList.remove('drag');addFiles(e.dataTransfer.files);};
-$('job-form').onsubmit=submit;$('refresh').onclick=refresh;
+$('job-form').onsubmit=submit;$('refresh').onclick=refresh;$('accuracy-preset').onclick=restoreAccuracyPreset;
+$('offline-identity-mode').onchange=updateControls;
 $('stop').onclick=async()=>{if(!state.selected)return;try{setBusy(true);const job=await api(`/api/jobs/${state.selected.id}/stop`,{method:'POST'});renderJob(job);}catch(e){showError('task-error',e.message);}finally{setBusy(false);}};
 renderStreams();setMode(new URLSearchParams(location.search).get('mode'));poll();
 window.addEventListener('pagehide',clearCards);
